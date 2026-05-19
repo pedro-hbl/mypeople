@@ -1,0 +1,344 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>mypeople — pick features from tmux-boss</title>
+<style>
+  :root {
+    --bg: #fafafa;
+    --fg: #111;
+    --muted: #666;
+    --line: #e2e2e2;
+    --accent: #1f6feb;
+    --box: #fff;
+    --code-bg: #f1f1f1;
+    --keep: #1e6e2c;
+    --keep-bg: #e6f4ea;
+    --cut: #a52a2a;
+    --cut-bg: #fce8e6;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f1113;
+      --fg: #f0f0f0;
+      --muted: #9aa0a6;
+      --line: #262a2e;
+      --accent: #5fa8ff;
+      --box: #181b1e;
+      --code-bg: #1d2024;
+      --keep: #7ee29a;
+      --keep-bg: #14331c;
+      --cut: #ff9089;
+      --cut-bg: #3b1a18;
+    }
+  }
+  html, body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; }
+  main { max-width: 900px; margin: 0 auto; padding: 40px 24px 60px; }
+  h1 { font-size: 28px; margin: 0 0 4px; letter-spacing: -0.01em; }
+  .lede { color: var(--muted); margin: 0 0 12px; }
+  .actions { margin: 16px 0 28px; display: flex; gap: 10px; flex-wrap: wrap; }
+  .actions button {
+    font: inherit; padding: 6px 12px; border-radius: 5px; border: 1px solid var(--line);
+    background: var(--box); color: var(--fg); cursor: pointer;
+  }
+  .actions button:hover { border-color: var(--accent); color: var(--accent); }
+  h2 {
+    font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted);
+    font-weight: 600; margin: 32px 0 10px;
+  }
+  .group {
+    background: var(--box); border: 1px solid var(--line); border-radius: 8px;
+    padding: 4px 0; margin-bottom: 6px;
+  }
+  .feature {
+    display: grid; grid-template-columns: 28px 1fr; gap: 10px;
+    padding: 12px 18px; border-bottom: 1px solid var(--line); align-items: start;
+  }
+  .feature:last-child { border-bottom: 0; }
+  .feature input[type=checkbox] { margin-top: 3px; width: 16px; height: 16px; }
+  .feature .body { min-width: 0; }
+  .feature .title { font-weight: 600; font-size: 14px; }
+  .feature .desc { color: var(--muted); font-size: 13px; margin-top: 2px; line-height: 1.45; }
+  .feature .where { font-family: ui-monospace, Menlo, monospace; font-size: 11px; color: var(--muted); margin-top: 4px; }
+  .feature .where code { background: var(--code-bg); padding: 1px 4px; border-radius: 3px; }
+  .pill {
+    display: inline-block; padding: 1px 6px; border-radius: 3px; font-size: 10px;
+    font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; margin-left: 6px;
+    vertical-align: middle;
+  }
+  .pill.core { background: var(--keep-bg); color: var(--keep); }
+  .pill.heavy { background: var(--cut-bg); color: var(--cut); }
+  .summary {
+    position: sticky; bottom: 12px; margin-top: 24px;
+    background: var(--box); border: 1px solid var(--line); border-radius: 8px;
+    padding: 12px 18px; font-size: 13px;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.06);
+  }
+  .summary b { color: var(--accent); }
+  .journey {
+    background: var(--box); border: 1px solid var(--line); border-radius: 8px;
+    padding: 12px 16px; margin-bottom: 8px; font-size: 14px;
+  }
+  .journey b { color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+
+<h1>mypeople — feature menu</h1>
+<p class="lede">Tick what you want for v1. Skip what you don't. Pill colors are hints, not rules — <span class="pill core">core</span> = nothing useful without it, <span class="pill heavy">heavy</span> = its own subsystem.</p>
+
+<div class="actions">
+  <button onclick="toggleAll(true)">check all</button>
+  <button onclick="toggleAll(false)">uncheck all</button>
+  <button onclick="onlyCore()">only core</button>
+  <button onclick="copySelection()">copy selection</button>
+</div>
+
+<h2>1 · Core agent control</h2>
+<div class="group">
+  <label class="feature"><input type="checkbox" data-key="spawn" data-core="1">
+    <div class="body">
+      <div class="title">Spawn an agent <span class="pill core">core</span></div>
+      <div class="desc">Create a tmux tab in a named session, exec a CLI (claude/codex/etc), inject identity env vars.</div>
+      <div class="where">today: <code>session-manager.py spawn &lt;project&gt; --name &lt;tab&gt; -s &lt;session&gt;</code></div>
+    </div></label>
+
+  <label class="feature"><input type="checkbox" data-key="send" data-core="1">
+    <div class="body">
+      <div class="title">Send a message to an agent <span class="pill core">core</span></div>
+      <div class="desc">Queue a message addressed to <code>session:tab</code>. Delivered via bracketed-paste send-keys.</div>
+      <div class="where">today: <code>session-manager.py send &lt;session&gt; --tab &lt;tab&gt; "msg"</code></div>
+    </div></label>
+
+  <label class="feature"><input type="checkbox" data-key="peek" data-core="1">
+    <div class="body">
+      <div class="title">Peek an agent's terminal <span class="pill core">core</span></div>
+      <div class="desc">Capture the current pane contents. The human-eye view; complements hook-based state.</div>
+      <div class="where">today: <code>session-manager.py peek &lt;session&gt; --tab &lt;tab&gt;</code></div>
+    </div></label>
+
+  <label class="feature"><input type="checkbox" data-key="kill" data-core="1">
+    <div class="body">
+      <div class="title">Kill an agent or session <span class="pill core">core</span></div>
+      <div class="desc">Graceful exit a single tab, or nuke the whole session.</div>
+      <div class="where">today: <code>session-manager.py kill &lt;session&gt; [--tab &lt;tab&gt;]</code></div>
+    </div></label>
+
+  <label class="feature"><input type="checkbox" data-key="status" data-core="1">
+    <div class="body">
+      <div class="title">List all agents + state <span class="pill core">core</span></div>
+      <div class="desc">Per-agent: idle / working / dead. Across sessions and across hosts.</div>
+      <div class="where">today: <code>session-manager.py status</code> / <code>tree</code></div>
+    </div></label>
+</div>
+
+<h2>2 · Topology &amp; routing</h2>
+<div class="group">
+  <label class="feature"><input type="checkbox" data-key="boss-tab">
+    <div class="body">
+      <div class="title">Master/Boss tab pattern</div>
+      <div class="desc">One tab per session designated as the "boss". Receives notifications from its workers.</div>
+      <div class="where">today: <code>spawn --master</code> + <code>--boss mc-foo:Boss</code></div>
+    </div></label>
+
+  <label class="feature"><input type="checkbox" data-key="peer-msg">
+    <div class="body">
+      <div class="title">Peer-to-peer messaging</div>
+      <div class="desc">Any agent can send to any other agent (eng-claude → qa-claude directly, not via boss).</div>
+      <div class="where">today: every agent has <code>session-manager.py</code> in its PATH + a sender id from env</div>
+    </div></label>
+
+  <label class="feature"><input type="checkbox" data-key="multi-host">
+    <div class="body">
+      <div class="title">Cross-host routing <span class="pill heavy">heavy</span></div>
+      <div class="desc">Spawn / send to an agent on a different machine. Needs the HTTP queue-server + per-host queue-client daemons.</div>
+      <div class="where">today: <code>spawn --host server</code></div>
+    </div></label>
+</div>
+
+<h2>3 · Lifecycle notifications</h2>
+<div class="group">
+  <label class="feature"><input type="checkbox" data-key="stop-hook" data-core="1">
+    <div class="body">
+      <div class="title">Agent → Boss notification on Stop <span class="pill core">core</span></div>
+      <div class="desc">When an agent finishes a turn, a line lands in the Boss tab: <code>[AGENT NOTIFICATION] worker-1 finished: ...</code>. Powered by per-spawn plugin (just shipped).</div>
+      <div class="where">today: <code>plugins/tmux-boss-hooks/</code> + <code>agent-stop-hook.sh</code></div>
+    </div></label>
+
+  <label class="feature"><input type="checkbox" data-key="status-files">
+    <div class="body">
+      <div class="title">Per-agent JSON status files</div>
+      <div class="desc">Every Stop writes <code>status/&lt;sess&gt;/&lt;agent&gt;.json</code> with last summary + session_id. Used by HUD, watchdog, resume.</div>
+      <div class="where">today: <code>agent-stop-hook.sh</code> writes them</div>
+    </div></label>
+
+  <label class="feature"><input type="checkbox" data-key="prompt-audit">
+    <div class="body">
+      <div class="title">UserPromptSubmit audit hook</div>
+      <div class="desc">Fires every time an agent receives a prompt. Useful for "what was the last thing this agent was asked?" Optional debug telemetry.</div>
+      <div class="where">today: <code>agent-start-hook.sh</code></div>
+    </div></label>
+</div>
+
+<h2>4 · Observability</h2>
+<div class="group">
+  <label class="feature"><input type="checkbox" data-key="hud">
+    <div class="body">
+      <div class="title">Live HUD dashboard</div>
+      <div class="desc">Browser page showing every agent's current state, last summary, last activity, with click-to-act controls. Served by queue-server.</div>
+      <div class="where">today: <code>http://127.0.0.1:9900/dashboard</code> from <code>queue-server/dashboard.html</code></div>
+    </div></label>
+
+  <label class="feature"><input type="checkbox" data-key="browser-attach">
+    <div class="body">
+      <div class="title">Browser tmux attach (ttyd)</div>
+      <div class="desc">Open a real tmux session in a browser tab — useful for attaching from a phone or another machine.</div>
+      <div class="where">today: <code>ttyd-tmux-attach.sh</code> + ttyd on port 7681</div>
+    </div></label>
+</div>
+
+<h2>5 · Reliability</h2>
+<div class="group">
+  <label class="feature"><input type="checkbox" data-key="watchdog">
+    <div class="body">
+      <div class="title">Delivery watchdog</div>
+      <div class="desc">After a <code>send</code>, watchdog verifies the target actually processed it within N seconds, otherwise sends a <code>[DELIVERY ALERT]</code> back to the original sender.</div>
+      <div class="where">today: watchdog agent in <code>mc-tmux-boss</code> session</div>
+    </div></label>
+
+  <label class="feature"><input type="checkbox" data-key="lazy-detect">
+    <div class="body">
+      <div class="title">All-idle detector</div>
+      <div class="desc">When every agent has gone idle, kick the Boss with "what now?" — turns idle time into Boss-driven planning time.</div>
+      <div class="where">today: <code>lazy-detect</code> agent + special exclusion in stop hook</div>
+    </div></label>
+
+  <label class="feature"><input type="checkbox" data-key="disaster-recovery">
+    <div class="body">
+      <div class="title">Disaster recovery snapshots <span class="pill heavy">heavy</span></div>
+      <div class="desc">Periodic dump of all agent state so a system crash can be reconstructed.</div>
+      <div class="where">today: <code>disaster-recovery/</code></div>
+    </div></label>
+</div>
+
+<h2>6 · Agent backends</h2>
+<div class="group">
+  <label class="feature"><input type="checkbox" data-key="backend-claude" data-core="1">
+    <div class="body">
+      <div class="title">Claude Code backend <span class="pill core">core</span></div>
+      <div class="desc">Spawn agents running <code>claude</code>. Full plugin/hooks integration.</div>
+    </div></label>
+
+  <label class="feature"><input type="checkbox" data-key="backend-codex">
+    <div class="body">
+      <div class="title">Codex backend</div>
+      <div class="desc">Spawn agents running <code>codex</code>. No plugin support; notifications via codex's own hook config.</div>
+    </div></label>
+
+  <label class="feature"><input type="checkbox" data-key="backend-pi">
+    <div class="body">
+      <div class="title">PI backend</div>
+      <div class="desc">Spawn lightweight inference agents (Plow/PI). Different prompt style + model.</div>
+    </div></label>
+
+  <label class="feature"><input type="checkbox" data-key="backend-terminal">
+    <div class="body">
+      <div class="title">Plain terminal backend</div>
+      <div class="desc">Spawn a shell pane (no CLI) for utility tabs.</div>
+    </div></label>
+</div>
+
+<h2>7 · Persistence</h2>
+<div class="group">
+  <label class="feature"><input type="checkbox" data-key="resume">
+    <div class="body">
+      <div class="title">Resume an agent's prior conversation</div>
+      <div class="desc">Re-spawn with the same context (<code>--resume</code>) — reads session_id from the status file and tells the CLI to continue.</div>
+      <div class="where">today: <code>spawn --resume</code></div>
+    </div></label>
+
+  <label class="feature"><input type="checkbox" data-key="wiki">
+    <div class="body">
+      <div class="title">Agent wiki (persistent memory) <span class="pill heavy">heavy</span></div>
+      <div class="desc">Per-agent markdown page that survives death/restart. Agents read on boot, write on progress. Survives across resume cycles.</div>
+      <div class="where">today: <code>wiki-librarian.py</code> + <code>wiki/agents/...</code></div>
+    </div></label>
+
+  <label class="feature"><input type="checkbox" data-key="file-attach">
+    <div class="body">
+      <div class="title">Attach files to messages</div>
+      <div class="desc">Detect file paths in a message and copy them to a known location the receiver can read.</div>
+      <div class="where">today: <code>_detect_files_in_message</code> in <code>cmd_send</code></div>
+    </div></label>
+</div>
+
+<h2>8 · Integrations</h2>
+<div class="group">
+  <label class="feature"><input type="checkbox" data-key="voice-notify">
+    <div class="body">
+      <div class="title">Voice notifications to the CEO</div>
+      <div class="desc">Push a message to a speaker so you hear it even when not looking at the terminal.</div>
+      <div class="where">today: <code>ceo-speaker</code> + <code>talk-to-ceo</code> skill</div>
+    </div></label>
+
+  <label class="feature"><input type="checkbox" data-key="gh-pr-watch">
+    <div class="body">
+      <div class="title">GitHub PR watcher <span class="pill heavy">heavy</span></div>
+      <div class="desc">Daemon that polls GitHub for new comments / approvals on your PRs and notifies the relevant agent.</div>
+      <div class="where">today: <code>gh-pr-watcher.py</code></div>
+    </div></label>
+
+  <label class="feature"><input type="checkbox" data-key="linq-poller">
+    <div class="body">
+      <div class="title">Linq poller <span class="pill heavy">heavy</span></div>
+      <div class="desc">External integration poller (use-case-specific).</div>
+      <div class="where">today: <code>linq-poller.py</code></div>
+    </div></label>
+
+  <label class="feature"><input type="checkbox" data-key="self-improve">
+    <div class="body">
+      <div class="title">Self-improve loop <span class="pill heavy">heavy</span></div>
+      <div class="desc">Periodic critique-and-evolve agent. Out of scope for v1 in almost every case.</div>
+      <div class="where">today: <code>self-improve.py</code></div>
+    </div></label>
+</div>
+
+<h2>9 · User journeys (what you can actually do)</h2>
+<div class="group" style="background: transparent; border: 0; padding: 0;">
+  <label class="journey"><input type="checkbox" data-key="j-oneoff"> <b>One-off task</b> — spawn a single agent, chat with it via send/peek, kill when done.</label>
+  <label class="journey"><input type="checkbox" data-key="j-brigade"> <b>Run a brigade</b> — spawn a team (eng + qa + review), give each their role's initial prompt, watch results converge.</label>
+  <label class="journey"><input type="checkbox" data-key="j-boss-orchestration"> <b>Boss orchestration</b> — Boss agent spawns + sends + monitors a fleet of workers, escalating to me only when blocked.</label>
+  <label class="journey"><input type="checkbox" data-key="j-peer"> <b>Peer collaboration</b> — eng messages qa directly without bouncing through Boss; round-trip artifact reviews.</label>
+  <label class="journey"><input type="checkbox" data-key="j-hud-watch"> <b>Watch the HUD</b> — open the dashboard in a browser, see every agent's last summary update live.</label>
+  <label class="journey"><input type="checkbox" data-key="j-attach"> <b>Take over an agent</b> — <code>tmux attach</code> (or browser ttyd) to a live agent's pane to drive it directly.</label>
+  <label class="journey"><input type="checkbox" data-key="j-resume"> <b>Resume after restart</b> — system crashed or you killed an agent; re-spawn with same context and pick up where it left off.</label>
+  <label class="journey"><input type="checkbox" data-key="j-multi-host"> <b>Multi-machine fleet</b> — Boss on laptop, heavy workers on a server, both addressed by the same <code>session:tab</code> handle.</label>
+  <label class="journey"><input type="checkbox" data-key="j-voice"> <b>Voice escalation</b> — important events get spoken aloud so you know without looking.</label>
+  <label class="journey"><input type="checkbox" data-key="j-gh-react"> <b>GitHub reactivity</b> — agents wake up and act when a PR comment / review arrives.</label>
+</div>
+
+<div class="summary" id="summary">
+  <b id="count">0</b> features selected. <span id="picked" style="color: var(--muted); font-size: 12px;"></span>
+</div>
+
+<script>
+  const update = () => {
+    const checked = [...document.querySelectorAll('input[type=checkbox]:checked')];
+    document.getElementById('count').textContent = checked.length;
+    document.getElementById('picked').textContent = checked.map(c => c.dataset.key).join(' · ');
+  };
+  document.querySelectorAll('input[type=checkbox]').forEach(c => c.addEventListener('change', update));
+  function toggleAll(v) { document.querySelectorAll('input[type=checkbox]').forEach(c => c.checked = v); update(); }
+  function onlyCore() { document.querySelectorAll('input[type=checkbox]').forEach(c => c.checked = c.dataset.core === '1'); update(); }
+  function copySelection() {
+    const keys = [...document.querySelectorAll('input[type=checkbox]:checked')].map(c => c.dataset.key);
+    navigator.clipboard.writeText(keys.join('\n')).then(() => alert('copied ' + keys.length + ' keys'));
+  }
+  update();
+</script>
+
+</main>
+</body>
+</html>

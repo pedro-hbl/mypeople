@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>mypeople — SEED plan</title>
+<style>
+  :root {
+    --bg: #fafafa;
+    --fg: #111;
+    --muted: #666;
+    --line: #e2e2e2;
+    --accent: #1f6feb;
+    --box: #fff;
+    --code-bg: #f1f1f1;
+    --num-bg: #1f6feb;
+    --num-fg: #fff;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f1113;
+      --fg: #f0f0f0;
+      --muted: #9aa0a6;
+      --line: #262a2e;
+      --accent: #5fa8ff;
+      --box: #181b1e;
+      --code-bg: #1d2024;
+      --num-bg: #2766b3;
+      --num-fg: #fff;
+    }
+  }
+  html, body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; }
+  main { max-width: 820px; margin: 0 auto; padding: 48px 24px 80px; }
+  h1 { font-size: 32px; margin: 0 0 6px; letter-spacing: -0.015em; }
+  .lede { color: var(--muted); margin: 0 0 32px; font-size: 15px; }
+  code { background: var(--code-bg); padding: 1px 5px; border-radius: 3px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
+  .seed {
+    background: var(--box); border: 1px solid var(--line); border-radius: 10px;
+    margin-bottom: 12px; padding: 18px 20px;
+    display: grid; grid-template-columns: 44px 1fr; gap: 16px; align-items: start;
+  }
+  .num {
+    width: 36px; height: 36px; border-radius: 50%; background: var(--num-bg); color: var(--num-fg);
+    display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 16px;
+  }
+  .seed h3 { margin: 0 0 4px; font-size: 17px; letter-spacing: -0.005em; }
+  .seed .theme { color: var(--muted); font-size: 13px; margin-bottom: 10px; }
+  .row { display: grid; grid-template-columns: 92px 1fr; gap: 10px; font-size: 13px; padding: 4px 0; }
+  .row .k { color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; font-size: 11px; padding-top: 2px; }
+  .caps span { display: inline-block; background: var(--code-bg); padding: 1px 7px; border-radius: 3px; margin: 0 4px 4px 0; font-family: ui-monospace, Menlo, monospace; font-size: 12px; }
+  h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); font-weight: 600; margin: 36px 0 10px; }
+  .panel { background: var(--box); border: 1px solid var(--line); border-radius: 10px; padding: 14px 18px; font-size: 14px; }
+  .panel ul { padding-left: 20px; margin: 6px 0; }
+  .panel li { margin: 4px 0; }
+  .panel li b { color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+
+<h1>mypeople — SEED plan</h1>
+<p class="lede">5 seeds. Each pastable into a fresh container with claude only. Each <code>## Verify</code> proves capabilities from the pane (not from agent self-report). Don't move to N+1 until N's Verify passes from a clean container.</p>
+
+<div class="seed">
+  <div class="num">1</div>
+  <div>
+    <h3>Foundation</h3>
+    <div class="theme">Runtime alive. No agents yet. All custom code <b>inlined</b> in the seed as heredocs — no git clone.</div>
+    <div class="row"><div class="k">Adds</div><div>apt-install <code>tmux python3 jq</code>; write inline <code>queue-server.py</code> + <code>queue-client.py</code> + <code>mp</code> CLI from heredocs; generate <code>queue.env</code> with secret; launch both daemons</div></div>
+    <div class="row"><div class="k">Verify</div><div><code>curl 127.0.0.1:9900/health</code> → 200; <code>mp status</code> → "No active agents"; both daemons in <code>ps</code></div></div>
+  </div>
+</div>
+
+<div class="seed">
+  <div class="num">2</div>
+  <div>
+    <h3>Core agent loop</h3>
+    <div class="theme">Single-agent, local. The minimum useful thing.</div>
+    <div class="row"><div class="k">Caps</div><div class="caps"><span>spawn</span> <span>backend-claude</span> <span>send</span> <span>peek</span> <span>kill</span> <span>status</span></div></div>
+    <div class="row"><div class="k">Verify</div><div>spawn <code>w1</code>; send "echo MARK"; capture-pane contains MARK; status shows w1 idle; kill; status shows no w1</div></div>
+  </div>
+</div>
+
+<div class="seed">
+  <div class="num">3</div>
+  <div>
+    <h3>Lifecycle notifications</h3>
+    <div class="theme">Agent → Boss handoff via the per-spawn plugin.</div>
+    <div class="row"><div class="k">Caps</div><div class="caps"><span>boss-tab</span> <span>stop-hook</span> <span>status-files</span></div></div>
+    <div class="row"><div class="k">Verify</div><div>spawn Boss + <code>w1</code> (<code>--boss mc-test:Boss</code>); send w1 "reply PONG"; <code>status/mc-test/w1.json</code> summary = PONG; Boss pane contains <code>[AGENT NOTIFICATION] w1 … PONG</code></div></div>
+  </div>
+</div>
+
+<div class="seed">
+  <div class="num">4</div>
+  <div>
+    <h3>Observability</h3>
+    <div class="theme">The human view — dashboard and browser attach.</div>
+    <div class="row"><div class="k">Caps</div><div class="caps"><span>hud</span> <span>browser-attach</span></div></div>
+    <div class="row"><div class="k">Verify</div><div><code>curl /dashboard</code> 200; <code>/agents</code> API lists spawned agent; <code>curl :7681</code> 200</div></div>
+  </div>
+</div>
+
+<div class="seed">
+  <div class="num">5</div>
+  <div>
+    <h3>Cross-host via Tailscale</h3>
+    <div class="theme">Goes sideways. Two containers, one Tailnet.</div>
+    <div class="row"><div class="k">Caps</div><div class="caps"><span>cross-host</span></div></div>
+    <div class="row"><div class="k">Verify</div><div>two containers joined to same Tailnet, queue-server on A; spawn on B; tab exists on B (not A); message sent from A lands in B's pane; Stop notification routes back to A's Boss</div></div>
+  </div>
+</div>
+
+<h2>Why this order</h2>
+<div class="panel">
+  <ul>
+    <li><b>1 before 2</b> — can't spawn agents without the queue running.</li>
+    <li><b>2 before 3</b> — boss-tab is a special spawn flag; spawn must work first. Notifications need agents to notify.</li>
+    <li><b>3 before 4</b> — HUD reads data that stop-hook + status-files produce; testing dashboard with zero agents is meaningless.</li>
+    <li><b>5 last</b> — everything proven single-host first, then scales sideways. Adds Tailscale auth as a new Input.</li>
+  </ul>
+</div>
+
+<h2>Anti-goals (every SEED MUST NOT)</h2>
+<div class="panel">
+  <ul>
+    <li>Use OS package installs the seed didn't declare (beloved-engineer rule)</li>
+    <li>Self-report DONE without the Verify script exiting 0</li>
+    <li>Depend on artifacts from the host — everything inside the container</li>
+    <li>Skip the Interview (Step 0 collects inputs before any state change)</li>
+  </ul>
+</div>
+
+<h2>Self-contained constraint</h2>
+<div class="panel">
+  <ul>
+    <li><b>No git clone of mypeople code.</b> Every SEED inlines the source it ships (queue-server.py, queue-client.py, mp CLI, plugin files) as heredocs. Pasting the seed into claude is the install.</li>
+    <li>OS package installs (e.g. <code>apt-get install tmux</code>) are still declared in <code>## Inputs</code> and done in Steps.</li>
+    <li>For SEED 5: a Tailscale auth key, collected in that SEED's Inputs.</li>
+    <li>Each SEED N is a superset write — it can rewrite files from N-1. <code>## Cleanup</code> brings the host back to N=0 so Verify re-runs cleanly.</li>
+  </ul>
+</div>
+
+</main>
+</body>
+</html>

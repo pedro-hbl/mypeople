@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>mypeople</title>
+<style>
+  :root {
+    --bg: #fafafa;
+    --fg: #111;
+    --muted: #666;
+    --line: #e2e2e2;
+    --accent: #1f6feb;
+    --box: #fff;
+    --code-bg: #f1f1f1;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f1113;
+      --fg: #f0f0f0;
+      --muted: #9aa0a6;
+      --line: #262a2e;
+      --accent: #5fa8ff;
+      --box: #181b1e;
+      --code-bg: #1d2024;
+    }
+  }
+  html, body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  }
+  main {
+    max-width: 720px;
+    margin: 0 auto;
+    padding: 56px 28px 80px;
+  }
+  h1 {
+    font-size: 40px;
+    margin: 0 0 6px;
+    letter-spacing: -0.02em;
+    font-weight: 700;
+  }
+  .tag {
+    color: var(--muted);
+    font-size: 17px;
+    margin: 0 0 40px;
+  }
+  h2 {
+    font-size: 13px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--muted);
+    font-weight: 600;
+    margin: 48px 0 14px;
+  }
+  code {
+    background: var(--code-bg);
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 14px;
+  }
+  .diagram {
+    background: var(--box);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 24px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 13px;
+    line-height: 1.5;
+    white-space: pre;
+    overflow-x: auto;
+  }
+  .verbs {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: 10px 22px;
+    background: var(--box);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 22px 24px;
+  }
+  .verbs code {
+    background: none;
+    padding: 0;
+    color: var(--accent);
+    font-weight: 600;
+  }
+  .verbs .v { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 14px; }
+  .verbs .d { color: var(--fg); }
+  .contract {
+    display: grid;
+    gap: 12px;
+  }
+  .contract .row {
+    background: var(--box);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 16px 20px;
+  }
+  .contract .row b {
+    display: block;
+    font-size: 13px;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-weight: 600;
+    margin-bottom: 4px;
+  }
+  footer {
+    margin-top: 56px;
+    padding-top: 18px;
+    border-top: 1px solid var(--line);
+    color: var(--muted);
+    font-size: 12px;
+  }
+</style>
+</head>
+<body>
+<main>
+
+<h1>mypeople</h1>
+<p class="tag">One CLI. Drive many teams of TUI agents in tmux. That's it.</p>
+
+<h2>The picture</h2>
+<div class="diagram">  you  ──►  mp send mypeople:eng "do the thing"
+                     │
+                     ▼
+            ┌────────────────────┐
+            │  inbox/eng.jsonl   │  durable mailbox
+            └─────────┬──────────┘
+                      │ drained when agent is idle
+                      ▼
+   ┌──────────── tmux: mc-mypeople ────────────┐
+   │  tab: eng    →   any TUI (claude/codex)  │
+   │  tab: qa     →   any TUI                 │
+   │  tab: review →   any TUI                 │
+   └──────────────────┬───────────────────────┘
+                      │ agent emits lifecycle events
+                      ▼
+            ┌────────────────────┐
+            │  events/eng.jsonl  │  you tail this
+            └────────────────────┘
+</div>
+
+<h2>The CLI</h2>
+<div class="verbs">
+  <div class="v"><code>mp launch</code> mypeople</div>  <div class="d">create the team (tmux session + tabs + agents)</div>
+  <div class="v"><code>mp send</code> mypeople:eng "…"</div>  <div class="d">queue a message to one agent</div>
+  <div class="v"><code>mp peek</code> mypeople:eng</div>  <div class="d">see the agent's terminal right now</div>
+  <div class="v"><code>mp tail</code> mypeople</div>  <div class="d">stream lifecycle events across the team</div>
+  <div class="v"><code>mp status</code> mypeople</div>  <div class="d">who's idle / working / dead</div>
+  <div class="v"><code>mp stop</code> mypeople</div>  <div class="d">graceful shutdown + cleanup</div>
+</div>
+
+<h2>What an agent is</h2>
+<div class="contract">
+  <div class="row">
+    <b>Input</b>
+    A TUI in a tmux pane that we can type into with <code>tmux send-keys</code>.
+  </div>
+  <div class="row">
+    <b>Output</b>
+    Appends lifecycle events (<code>started</code>, <code>turn-ended</code>, <code>exited</code>) to a JSONL file.
+  </div>
+</div>
+<p style="color: var(--muted); font-size: 14px; margin-top: 12px;">
+  Claude Code already does this via a hooks plugin. For any other CLI we ship a thin shim. The runtime doesn't care which TUI runs in the pane.
+</p>
+
+<footer>v0 sketch — single machine, single boss, N teams.</footer>
+
+</main>
+</body>
+</html>

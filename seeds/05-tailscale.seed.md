@@ -1,12 +1,20 @@
-# SEED: mypeople-04-hud
+# SEED: mypeople-05-tailscale
 
 > seed-format: 1
 
 ## Goal
 
-Add the **HUD** (live browser dashboard) and **per-tab browser-attach** (ttyd deep-link into a specific tmux window) on top of SEED 3. From a browser the human sees every alive agent + last summary in real time, and clicks any row to attach to that specific tmux window.
+Join the container to a **Tailscale** tailnet so the HUD + ttyd are reachable from the human's mac (or any other tailnet node) via a stable hostname — no docker port-publishing, no socat sidecars, no host-port juggling. Once joined, `http://<container>.tail-net.ts.net:9900/dashboard` and `http://<container>.tail-net.ts.net:7681/?arg=-t&arg=mc-main:Boss` Just Work from anywhere on the tailnet (including the user's mac, phone, or another container).
 
-Superset of SEED 3.
+Superset of SEED 4.
+
+## Substrate prerequisite
+
+The container must be started with TUN + NET_ADMIN so tailscaled can bring up a kernel network interface:
+```
+docker run --cap-add=NET_ADMIN --device /dev/net/tun:/dev/net/tun ...
+```
+This is set in `seedlab/test-fresh/shell.sh` (the test-fresh substrate). If you spin up the container another way you MUST include those flags or the seed fails with `BLOCKED_REASON=no_tun_device`.
 
 ## Done
 
@@ -36,6 +44,9 @@ All SEED 2 Done bullets remain. Plus:
 | `HOST_ID` | no | `$(hostname -s)` | `hostname -s` works | default |
 | OS deps (`tmux python3 jq procps`) | yes | apt | `command -v` each | (no prompt — agent runs apt install non-interactively) |
 | claude CLI | yes | present | `command -v claude` | `BLOCKED_REASON=claude_not_installed` |
+| `TS_AUTHKEY` | **yes** | none | `[ -n "$TS_AUTHKEY" ]` (env or queue.env) | "Tailscale auth key — generate at https://login.tailscale.com/admin/settings/keys (reusable, ephemeral OFF, tag is fine). The seed cannot proceed without one." |
+| `TS_HOSTNAME` | no | `mypeople-$(hostname -s)` | always available | "Stable hostname this container should announce on the tailnet. Default: `mypeople-<short hostname>`. Will be reachable as `<hostname>.tail-net.ts.net`." |
+| TUN device | yes | substrate-provided | `[ -c /dev/net/tun ]` | `BLOCKED_REASON=no_tun_device` if missing (substrate must start the container with `--device /dev/net/tun --cap-add NET_ADMIN`) |
 
 ## Components
 
@@ -57,7 +68,18 @@ Detect all inputs. Send ONE consolidated Interview message. Wait for CEO reply. 
 
 ```bash
 sudo apt-get update -qq
-sudo apt-get install -y tmux python3 jq procps curl
+sudo apt-get install -y tmux python3 jq procps curl iproute2 iptables ca-certificates gnupg
+# Tailscale: official Debian repo. Pin to bookworm (Debian 12) since the substrate is node:20-bookworm-slim.
+if ! command -v tailscale >/dev/null; then
+  curl -fsSL https://pkgs.tailscale.com/stable/debian/bookworm.noarmor.gpg | sudo tee /usr/share/keyrings/tailscale-archive-keyring.gpg >/dev/null
+  curl -fsSL https://pkgs.tailscale.com/stable/debian/bookworm.tailscale-keyring.list | sudo tee /etc/apt/sources.list.d/tailscale.list >/dev/null
+  sudo apt-get update -qq
+  sudo apt-get install -y tailscale
+fi
+command -v tailscale >/dev/null || { echo "BLOCKED_REASON=tailscale_install_failed"; exit 1; }
+# Verify the substrate exposed /dev/net/tun (required for tailscaled).
+[ -c /dev/net/tun ] || { echo "BLOCKED_REASON=no_tun_device"; exit 1; }
+
 # ttyd: try apt first; fall back to upstream binary if not in this Debian release.
 if ! command -v ttyd >/dev/null; then
   if ! sudo apt-get install -y ttyd 2>/dev/null; then
@@ -79,13 +101,14 @@ command -v ttyd >/dev/null || { echo "BLOCKED_REASON=ttyd_install_failed"; exit 
 
 ```bash
 INSTALL_DIR="${INSTALL_DIR:-$HOME/mypeople}"
-for name in queue-client queue-server ttyd; do
+for name in queue-client queue-server ttyd tailscaled; do
   pidfile="$INSTALL_DIR/run/$name.pid"
-  [ -f "$pidfile" ] && kill "$(cat $pidfile)" 2>/dev/null || true
+  [ -f "$pidfile" ] && sudo kill "$(cat $pidfile)" 2>/dev/null || true
 done
 pkill -f "$INSTALL_DIR/bin/queue-client.py" 2>/dev/null || true
 pkill -f "$INSTALL_DIR/bin/queue-server.py" 2>/dev/null || true
 pkill -f "ttyd -W -p" 2>/dev/null || true
+sudo pkill -f tailscaled 2>/dev/null || true
 ```
 
 ### 3. Create directory layout
@@ -1061,6 +1084,7 @@ else
 fi
 QUEUE_PORT="${QUEUE_PORT:-9900}"
 HOST_ID="${HOST_ID:-$(hostname -s)}"
+TS_HOSTNAME="${TS_HOSTNAME:-mypeople-$(hostname -s)}"
 cat > "$HOME/.config/mypeople/queue.env" <<EOF
 QUEUE_URL=http://127.0.0.1:${QUEUE_PORT}
 QUEUE_SECRET=${SECRET}
@@ -1070,8 +1094,59 @@ QUEUE_POLL_INTERVAL=1.0
 HOST_ID=${HOST_ID}
 INSTALL_DIR=${INSTALL_DIR:-$HOME/mypeople}
 TTYD_PORT=${TTYD_PORT:-7681}
+TS_HOSTNAME=${TS_HOSTNAME}
 EOF
 chmod 600 "$HOME/.config/mypeople/queue.env"
+```
+
+### 8.5. Start tailscaled + join the tailnet
+
+**Why**: each container gets its own tailnet identity. The HUD + ttyd are then reachable via `http://<TS_HOSTNAME>.<your-tailnet>.ts.net:...` from any other tailnet node (your mac, your phone, other containers) — no port-publishing, no host-IP dependency.
+
+```bash
+INSTALL_DIR="${INSTALL_DIR:-$HOME/mypeople}"
+TS_HOSTNAME="${TS_HOSTNAME:-mypeople-$(hostname -s)}"
+TS_STATE_DIR="$INSTALL_DIR/run/tailscale-state"
+sudo mkdir -p "$TS_STATE_DIR"
+
+# Start tailscaled (root, needs NET_ADMIN + /dev/net/tun)
+sudo nohup tailscaled \
+  --state="$TS_STATE_DIR/tailscaled.state" \
+  --socket="$TS_STATE_DIR/tailscaled.sock" \
+  > "$INSTALL_DIR/run/tailscaled.log" 2>&1 &
+echo $! | sudo tee "$INSTALL_DIR/run/tailscaled.pid" >/dev/null
+
+# Wait for the socket
+for i in $(seq 1 30); do
+  sudo test -S "$TS_STATE_DIR/tailscaled.sock" && break
+  sleep 0.5
+done
+sudo test -S "$TS_STATE_DIR/tailscaled.sock" || { echo "BLOCKED_REASON=tailscaled_socket_never_appeared"; tail -30 "$INSTALL_DIR/run/tailscaled.log"; exit 1; }
+
+# Join the tailnet
+if [ -z "${TS_AUTHKEY:-}" ]; then
+  echo "BLOCKED_REASON=ts_authkey_not_set (export TS_AUTHKEY before re-running Step 8.5)"
+  exit 1
+fi
+sudo tailscale --socket="$TS_STATE_DIR/tailscaled.sock" up \
+  --authkey="$TS_AUTHKEY" \
+  --hostname="$TS_HOSTNAME" \
+  --ssh=false \
+  --accept-routes=false \
+  --advertise-tags="" || { echo "BLOCKED_REASON=tailscale_up_failed"; exit 1; }
+
+# Wait for the IP to assign + DNS to register
+for i in $(seq 1 30); do
+  IPV4=$(sudo tailscale --socket="$TS_STATE_DIR/tailscaled.sock" ip -4 2>/dev/null | head -1)
+  [ -n "$IPV4" ] && break
+  sleep 1
+done
+[ -n "$IPV4" ] || { echo "BLOCKED_REASON=tailscale_no_ipv4_assigned"; exit 1; }
+echo "tailscale node up: $TS_HOSTNAME @ $IPV4"
+
+# Symlink the tailscale binary's socket so unprivileged invocations work
+sudo ln -sf "$TS_STATE_DIR/tailscaled.sock" /var/run/tailscale/tailscaled.sock 2>/dev/null || true
+sudo chmod 666 "$TS_STATE_DIR/tailscaled.sock" 2>/dev/null || true
 ```
 
 ### 9. Start daemons
@@ -1213,10 +1288,30 @@ echo "$AGENTS_JSON" | jq -e '.[] | .tmux_target' >/dev/null || { echo "FAIL: /ag
 TTYD_PORT="$(grep ^TTYD_PORT= ~/.config/mypeople/queue.env 2>/dev/null | cut -d= -f2- || echo 7681)"
 curl -fsS -o /dev/null -w '%{http_code}' "http://127.0.0.1:${TTYD_PORT}/" | grep -q 200 || { echo "FAIL: ttyd not responding on $TTYD_PORT"; exit 1; }
 
-# ttyd must be running with `tmux attach` so URL args `?arg=-t&arg=mc-X:Y`
-# form a valid `tmux attach -t mc-X:Y` (bare `tmux` lands users in a default
-# session — historic bug). Assert the live command.
-ps -ax -o command | grep -E 'ttyd.* tmux attach' | grep -qv grep || { echo "FAIL: ttyd not running with 'tmux attach'"; ps -ax -o command | grep ttyd | head -3; exit 1; }
+# ttyd must be running with the `tmux attach` command (so URL args
+# `?arg=-t&arg=mc-X:Y` form a valid `tmux attach -t mc-X:Y`). Bare `tmux`
+# silently drops the user into a default session — historic bug. Catch
+# any regression by asserting the live process command.
+ps -ax -o command | grep -E 'ttyd.* tmux attach' | grep -qv grep || { echo "FAIL: ttyd not running with 'tmux attach' — attach links would land in a default session, not the target window"; ps -ax -o command | grep ttyd | head -3; exit 1; }
+
+# --- SEED 5: Tailscale ---
+
+# tailscaled daemon alive
+sudo test -S "$INSTALL_DIR/run/tailscale-state/tailscaled.sock" || { echo "FAIL: tailscaled socket missing"; exit 1; }
+
+# tailscale status shows our node (json output is stable)
+TS_STATUS=$(sudo tailscale --socket="$INSTALL_DIR/run/tailscale-state/tailscaled.sock" status --json 2>&1)
+echo "$TS_STATUS" | jq -e '.Self.Online == true' >/dev/null || { echo "FAIL: tailscale Self.Online != true"; echo "$TS_STATUS" | head -40; exit 1; }
+echo "$TS_STATUS" | jq -e '.Self.HostName' >/dev/null || { echo "FAIL: tailscale Self.HostName missing"; exit 1; }
+TS_HOSTNAME_ACTUAL=$(echo "$TS_STATUS" | jq -r '.Self.HostName')
+TS_IP=$(echo "$TS_STATUS" | jq -r '.Self.TailscaleIPs[0]')
+echo "tailnet identity: $TS_HOSTNAME_ACTUAL @ $TS_IP"
+
+# HUD reachable on the tailscale IP (proves the bind reaches the tailscale interface)
+curl -fsS -o /dev/null -w 'HUD via TS IP: HTTP %{http_code}\n' "http://$TS_IP:9900/dashboard" | grep -q 200 || { echo "FAIL: HUD not reachable on tailscale IP"; exit 1; }
+
+# ttyd reachable on tailscale IP
+curl -fsS -o /dev/null -w 'ttyd via TS IP: HTTP %{http_code}\n' "http://$TS_IP:7681/" | grep -q 200 || { echo "FAIL: ttyd not reachable on tailscale IP"; exit 1; }
 
 # Cleanup
 mp kill "main:worker-1" >/dev/null 2>&1 || true
@@ -1244,12 +1339,13 @@ INSTALL_DIR="${INSTALL_DIR:-$HOME/mypeople}"
 for s in $(tmux list-sessions -F '#{session_name}' 2>/dev/null | grep '^mc-'); do
   tmux kill-session -t "$s" 2>/dev/null || true
 done
-for name in queue-client queue-server ttyd; do
+for name in queue-client queue-server ttyd tailscaled; do
   pidfile="$INSTALL_DIR/run/$name.pid"
-  [ -f "$pidfile" ] && kill "$(cat $pidfile)" 2>/dev/null || true
+  [ -f "$pidfile" ] && sudo kill "$(cat $pidfile)" 2>/dev/null || true
 done
 pkill -f "$INSTALL_DIR/bin/queue-client.py" 2>/dev/null || true
 pkill -f "$INSTALL_DIR/bin/queue-server.py" 2>/dev/null || true
 pkill -f "ttyd -W -p" 2>/dev/null || true
+sudo pkill -f tailscaled 2>/dev/null || true
 rm -rf "$INSTALL_DIR/run" "$INSTALL_DIR/bin" "$INSTALL_DIR/plugins" "$INSTALL_DIR/status"
 ```

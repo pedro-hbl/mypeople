@@ -30,7 +30,7 @@ The seed asks for any missing inputs at Step 0 Interview, then runs to completio
 ## Use
 
 ```bash
-# inside the container, after install:
+# after install:
 mp spawn main:Boss --master --backend claude        # the Boss, with doctrine
 mp spawn main:worker-1 --backend claude --boss main:Boss
 mp send main:worker-1 "find me primes under 100"
@@ -40,6 +40,15 @@ mp kill main:worker-1
 ```
 
 The HUD shows everything. Click an agent's "attach" link to open its claude pane in the browser.
+
+## Verify it actually works
+
+After install, paste one of these into the Boss's claude pane:
+
+- [`tests/smoke.md`](tests/smoke.md) — 30s sanity check (2 workers, 2 messages)
+- [`tests/3-engineer-chain.md`](tests/3-engineer-chain.md) — 3-5 min orchestration test (2 turns × 3 engineers, deterministic math chain)
+
+See [`tests/README.md`](tests/README.md) for how to attach to the Boss.
 
 ## Docs
 

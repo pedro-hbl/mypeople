@@ -561,6 +561,12 @@ def execute_spawn(task):
     _, sess, tab = parsed
     backend = payload.get("backend", "claude")
     cwd = payload.get("cwd", os.path.expanduser("~"))
+    # Reject non-existent cwd upfront — otherwise `cd ...` fails inside the
+    # shell command, `exec claude` runs in the wrong directory, and the
+    # caller sees a confusing partial-failure with no clean error. This is
+    # the kind of silent fallthrough we never want.
+    if not os.path.isdir(cwd):
+        return False, f"cwd does not exist on this host: {cwd!r}"
     boss_id = payload.get("boss_id", "")
     is_master = bool(payload.get("is_master", False))
     mc_sess = f"mc-{sess}"

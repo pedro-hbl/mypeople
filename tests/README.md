@@ -20,6 +20,14 @@ Real orchestration test. Two turns × three engineers = six dependent round-trip
 
 Expect: Boss spawns three workers in `/tmp/mypeople-chain-test`, runs the two-turn chain, prints the final TOTAL, recomputes the math itself to flag inconsistencies, kills all three and removes the tmp dir.
 
+## Parallel fan-out (2–3 minutes)
+
+Orthogonal to the chain test: five engineers, five independent tasks, dispatched in parallel. Proves out-of-order notification handling and aggregation.
+
+[`tests/parallel-fanout.md`](parallel-fanout.md)
+
+Expect: Boss spawns five workers in `/tmp/mypeople-fanout-test`, fires all five sends without waiting, collects notifications as they arrive (likely out of order), prints a single aggregated results block, cleans up.
+
 ## How to attach to the Boss
 
 After install:

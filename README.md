@@ -2,7 +2,11 @@
 
 A tiny multi-agent orchestration runtime for Claude Code. Spawn agents, send messages, watch a HUD, all reachable across machines via Tailscale.
 
-The whole thing ships as one file: [`seeds/mypeople.seed.md`](seeds/mypeople.seed.md). Paste it into a fresh container's claude and you have a working system.
+The whole thing ships as one file: [`seeds/mypeople.seed.md`](seeds/mypeople.seed.md). Paste it into your claude (host or container) and you have a working system.
+
+Optional sibling seeds layer extra features on top (paste them AFTER mypeople is installed):
+
+- [`seeds/pr-autoapprove.seed.md`](seeds/pr-autoapprove.seed.md) — GitHub PR watcher + `/<user>-approve` auto-approval. Pushes new comments/reviews/mentions to the Boss via the mypeople queue.
 
 ## What you get
 

@@ -37,7 +37,7 @@ If either is missing: `BLOCKED_REASON=mypeople_not_installed` or `BLOCKED_REASON
 | `WATCHED_REPOS` | yes | none | `[ -s ~/.config/mypeople/gh-pr-watcher.env ] && grep -q WATCHED_REPOS=` | "Comma-separated `owner/repo` list to poll (e.g. `cncorp/plow,cncorp/codel-text`). At least one." |
 | `APPROVE_REPOS` | no | (same as `WATCHED_REPOS`) | env file | "Subset of WATCHED_REPOS where `/<SELF_USER>-approve` actually triggers `gh pr review --approve`. Other repos: notify-only. Default: all watched repos." |
 | `APPROVE_COMMAND` | no | `/<SELF_USER>-approve` | env file | "The comment marker that triggers auto-approval. Default: `/<SELF_USER>-approve`. Word-boundary matched so near-misses like `/<user>-approve-later` don't trigger." |
-| `POLL_INTERVAL` | no | `60` (seconds) | env file | "How often to poll GitHub. 60s is friendly to GH rate limits. Lower for tighter latency." |
+| `POLL_INTERVAL` | no | `15` (seconds) | env file | "How often to poll GitHub. With the `?since=<ts>` delta-fetch, each poll is ~3 calls/repo, so 15s = ~240 polls/hr × 3 = well under the 5000/hr authed limit. Lower for tighter latency; raise if you watch many repos." |
 | `BOSS_TARGET` | no | `<host>/main:Boss` | env file | "Full agent_id of the Boss to notify. Default: this host's main:Boss." |
 | `IGNORED_USERS` | no | `corgea[bot]` | env file | "Comma-separated GH users to silence entirely (bots, self-reviews). Comments / reviews from these users never trigger notifications. Approve-commands from these users are still honored (intentional — a bot can post the marker after CI passes)." |
 | `gh` CLI authed | yes | host-provided | `gh auth status` reports `Logged in` | `BLOCKED_REASON=gh_not_authed` — run `gh auth login` first. |
@@ -48,7 +48,7 @@ If either is missing: `BLOCKED_REASON=mypeople_not_installed` or `BLOCKED_REASON
 | Component | Source | Notes |
 |---|---|---|
 | `gh-pr-watcher.py` | **inline in this seed** | polls GH, decides relevance, posts to queue, runs approve-command |
-| state file | `~/mypeople/run/gh-pr-watcher-state.json` | `seen_ids[]`, `initialized_prs[]` so first run doesn't blast every existing comment |
+| state file | `~/mypeople/run/gh-pr-watcher-state.json` | `last_polled_at` per repo (ISO 8601 UTC) drives delta-fetch via `?since=`; `seen_ids[]` dedupes the 5s overlap window |
 | event archive | `~/.gh-pr-watcher/inbox/*.json` | full payloads so Boss can read more than the message snippet |
 | `gh` CLI | host-provided | `gh api`, `gh pr view`, `gh pr review --approve` |
 
@@ -84,7 +84,7 @@ SELF_USER="${SELF_USER:?must be set}"
 WATCHED_REPOS="${WATCHED_REPOS:?must be set}"
 APPROVE_REPOS="${APPROVE_REPOS:-$WATCHED_REPOS}"
 APPROVE_COMMAND="${APPROVE_COMMAND:-/${SELF_USER}-approve}"
-POLL_INTERVAL="${POLL_INTERVAL:-60}"
+POLL_INTERVAL="${POLL_INTERVAL:-15}"
 BOSS_TARGET="${BOSS_TARGET:-$(hostname -s)/main:Boss}"
 IGNORED_USERS="${IGNORED_USERS:-corgea[bot]}"
 cat > "$HOME/.config/mypeople/gh-pr-watcher.env" <<EOF
@@ -108,8 +108,9 @@ cat > "$INSTALL_DIR/bin/gh-pr-watcher.py" <<'PY_EOF'
 #!/usr/bin/env python3
 """mypeople gh-pr-watcher.
 
-Polls open PRs in WATCHED_REPOS for new comments / reviews / inline review
-comments. Two outputs per relevant event:
+Polls WATCHED_REPOS for new PR comments / reviews / inline review comments
+using GitHub's `since=<ts>` delta-fetch endpoints (1 call per repo per kind,
+not 3 calls per PR). Two outputs per relevant event:
   1. Push an `mp send` task to the Boss via the queue.
   2. If the event body contains APPROVE_COMMAND and the repo is in
      APPROVE_REPOS, run `gh pr review --approve` and surface that to Boss
@@ -118,6 +119,7 @@ comments. Two outputs per relevant event:
 
 from __future__ import annotations
 import argparse, json, os, re, subprocess, sys, time, urllib.error, urllib.request
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 CONFIG = Path.home() / ".config" / "mypeople" / "gh-pr-watcher.env"
@@ -126,6 +128,7 @@ STATE_FILE = INSTALL_DIR / "run" / "gh-pr-watcher-state.json"
 INBOX_DIR = Path.home() / ".gh-pr-watcher" / "inbox"
 QUEUE_ENV = Path.home() / ".config" / "mypeople" / "queue.env"
 GH_TIMEOUT = 20
+OVERLAP_SECONDS = 5  # re-query a small window each poll; seen_ids dedupes
 
 
 def load_env(path: Path) -> dict:
@@ -145,7 +148,7 @@ SELF_USER = CFG.get("SELF_USER", "")
 WATCHED_REPOS = [r.strip() for r in CFG.get("WATCHED_REPOS", "").split(",") if r.strip()]
 APPROVE_REPOS = set(r.strip() for r in CFG.get("APPROVE_REPOS", "").split(",") if r.strip()) or set(WATCHED_REPOS)
 APPROVE_COMMAND = CFG.get("APPROVE_COMMAND", f"/{SELF_USER}-approve")
-POLL_INTERVAL = int(CFG.get("POLL_INTERVAL", "60"))
+POLL_INTERVAL = int(CFG.get("POLL_INTERVAL", "15"))
 BOSS_TARGET = CFG.get("BOSS_TARGET", "")
 IGNORED_USERS = set(u.strip() for u in CFG.get("IGNORED_USERS", "").split(",") if u.strip())
 
@@ -154,6 +157,17 @@ QUEUE_SECRET = QC.get("QUEUE_SECRET", "")
 
 MENTION_RE = re.compile(rf"(?<![A-Za-z0-9_])@{re.escape(SELF_USER)}\b", re.IGNORECASE) if SELF_USER else None
 APPROVE_RE = re.compile(rf"(?<![A-Za-z0-9_/]){re.escape(APPROVE_COMMAND)}(?![A-Za-z0-9_-])")
+ISSUE_N_RE = re.compile(r"/issues/(\d+)$")
+PULL_N_RE = re.compile(r"/pulls/(\d+)$")
+
+
+def now_iso() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def shift_iso(iso_ts: str, delta_seconds: int) -> str:
+    dt = datetime.strptime(iso_ts, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+    return (dt + timedelta(seconds=delta_seconds)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def mentions_self(body: str) -> bool:
@@ -215,13 +229,14 @@ def push_to_boss(message: str) -> bool:
 
 def load_state() -> dict:
     if not STATE_FILE.exists():
-        return {"seen_ids": [], "initialized_prs": []}
+        return {"seen_ids": [], "last_polled_at": {}}
     try:
         d = json.loads(STATE_FILE.read_text())
-        d.setdefault("seen_ids", []); d.setdefault("initialized_prs", [])
+        d.setdefault("seen_ids", [])
+        d.setdefault("last_polled_at", {})
         return d
     except json.JSONDecodeError:
-        return {"seen_ids": [], "initialized_prs": []}
+        return {"seen_ids": [], "last_polled_at": {}}
 
 
 def save_state(state: dict) -> None:
@@ -247,7 +262,6 @@ def gh_api(path: str, paginate: bool = True) -> list | dict:
     if not out:
         return []
     if paginate:
-        # gh --paginate concatenates JSON arrays; merge them.
         merged = []
         for chunk in out.replace("][", ",").split("\n"):
             try:
@@ -265,25 +279,56 @@ def gh_api(path: str, paginate: bool = True) -> list | dict:
         return []
 
 
-def discover_open_prs(repos: list[str]) -> list[tuple[str, int, str]]:
-    """Return [(repo, pr_number, author_login), ...] for open PRs."""
-    items = []
-    for repo in repos:
-        prs = gh_api(f"/repos/{repo}/pulls?state=open&per_page=50", paginate=False)
-        for p in prs or []:
-            items.append((repo, int(p["number"]), p["user"]["login"]))
-    return items
+def list_open_prs(repo: str) -> dict[int, dict]:
+    """Return {pr_number: {author, updated_at}} for open PRs."""
+    prs = gh_api(f"/repos/{repo}/pulls?state=open&per_page=100", paginate=True)
+    out = {}
+    for p in prs or []:
+        out[int(p["number"])] = {"author": p["user"]["login"], "updated_at": p.get("updated_at") or ""}
+    return out
 
 
-def fetch_pr_events(repo: str, pr: int) -> list[dict]:
-    """Return a unified list of [{kind, id, user, body, repo, pr, extra}]."""
-    events = []
-    for ic in gh_api(f"/repos/{repo}/issues/{pr}/comments?per_page=100"):
-        events.append({"kind": "comment", "id": ic["id"], "user": ic["user"]["login"], "body": ic.get("body") or "", "repo": repo, "pr": pr, "extra": {}})
-    for rv in gh_api(f"/repos/{repo}/pulls/{pr}/reviews?per_page=100"):
-        events.append({"kind": "review", "id": rv["id"], "user": rv["user"]["login"], "body": rv.get("body") or "", "repo": repo, "pr": pr, "extra": {"state": rv.get("state") or ""}})
-    for rc in gh_api(f"/repos/{repo}/pulls/{pr}/comments?per_page=100"):
-        events.append({"kind": "review_comment", "id": rc["id"], "user": rc["user"]["login"], "body": rc.get("body") or "", "repo": repo, "pr": pr, "extra": {}})
+def fetch_new_events(repo: str, since_iso: str, open_prs: dict[int, dict]) -> list[dict]:
+    """Delta-fetch new events repo-wide via since=<ts>. Filters to open PRs only."""
+    events: list[dict] = []
+
+    # 1. Issue comments (covers PR conversation comments — PRs are issues at the API level)
+    ics = gh_api(f"/repos/{repo}/issues/comments?since={since_iso}&per_page=100&sort=created&direction=asc")
+    for ic in ics or []:
+        m = ISSUE_N_RE.search(ic.get("issue_url", "") or "")
+        if not m:
+            continue
+        n = int(m.group(1))
+        if n not in open_prs:
+            continue
+        events.append({"kind": "comment", "id": ic["id"], "user": ic["user"]["login"],
+                       "body": ic.get("body") or "", "repo": repo, "pr": n, "extra": {}})
+
+    # 2. PR review comments (inline diff comments)
+    rcs = gh_api(f"/repos/{repo}/pulls/comments?since={since_iso}&per_page=100&sort=created&direction=asc")
+    for rc in rcs or []:
+        m = PULL_N_RE.search(rc.get("pull_request_url", "") or "")
+        if not m:
+            continue
+        n = int(m.group(1))
+        if n not in open_prs:
+            continue
+        events.append({"kind": "review_comment", "id": rc["id"], "user": rc["user"]["login"],
+                       "body": rc.get("body") or "", "repo": repo, "pr": n, "extra": {}})
+
+    # 3. Reviews: no repo-wide since endpoint exists, so only fetch on PRs touched since last poll.
+    for pr_n, info in open_prs.items():
+        if info["updated_at"] and info["updated_at"] <= since_iso:
+            continue
+        rvs = gh_api(f"/repos/{repo}/pulls/{pr_n}/reviews?per_page=100", paginate=True)
+        for rv in rvs or []:
+            submitted = rv.get("submitted_at") or ""
+            if submitted and submitted <= since_iso:
+                continue
+            events.append({"kind": "review", "id": rv["id"], "user": (rv.get("user") or {}).get("login", ""),
+                           "body": rv.get("body") or "", "repo": repo, "pr": pr_n,
+                           "extra": {"state": rv.get("state") or ""}})
+
     return events
 
 
@@ -305,23 +350,29 @@ def format_message(event: dict, archive_path: Path, reason: str) -> str:
 
 
 def poll_once(state: dict, dry_run: bool = False) -> None:
-    open_prs = discover_open_prs(WATCHED_REPOS)
-    print(f"poll: {len(open_prs)} open PR(s) across {len(WATCHED_REPOS)} repo(s)")
     seen = set(state["seen_ids"])
-    initialized = set(state["initialized_prs"])
+    last_polled = state["last_polled_at"]
+    cycle_start = now_iso()
 
-    for repo, pr, pr_author in open_prs:
-        pr_key = f"{repo}#{pr}"
-        first_time = pr_key not in initialized
-        events = fetch_pr_events(repo, pr)
+    for repo in WATCHED_REPOS:
+        # First-time bootstrap for a repo: just stamp now() and skip notifications.
+        if repo not in last_polled:
+            last_polled[repo] = cycle_start
+            print(f"poll[{repo}]: first-encounter — stamping {cycle_start}, no notifications")
+            continue
+
+        since_iso = shift_iso(last_polled[repo], -OVERLAP_SECONDS)
+        open_prs = list_open_prs(repo)
+        events = fetch_new_events(repo, since_iso, open_prs)
+        print(f"poll[{repo}]: since={since_iso} → {len(events)} new event(s) across {len(open_prs)} open PR(s)")
+
         for ev in events:
             eid = f"{ev['kind']}:{ev['id']}"
             if eid in seen:
                 continue
             seen.add(eid)
-            if first_time:
-                continue  # bootstrap: don't notify on first encounter
 
+            pr_author = open_prs.get(ev["pr"], {}).get("author", "")
             reason = notify_reason(ev, pr_author)
             approve = is_approve_command(ev)
             if not reason and not approve:
@@ -329,9 +380,9 @@ def poll_once(state: dict, dry_run: bool = False) -> None:
 
             archive_path = archive_event(ev)
             if approve and not dry_run:
-                ok, info = approve_pr(repo, pr)
+                ok, info = approve_pr(ev["repo"], ev["pr"])
                 marker = "AUTO-APPROVED" if ok else "AUTO-APPROVE-FAILED"
-                msg = f"[{marker}] {repo}#{pr} via {APPROVE_COMMAND} by @{ev['user']}: {info[:200]}"
+                msg = f"[{marker}] {ev['repo']}#{ev['pr']} via {APPROVE_COMMAND} by @{ev['user']}: {info[:200]}"
                 push_to_boss(msg)
             if reason:
                 msg = format_message(ev, archive_path, reason)
@@ -339,10 +390,12 @@ def poll_once(state: dict, dry_run: bool = False) -> None:
                     print(f"  DRY: {msg}")
                 else:
                     push_to_boss(msg)
-        initialized.add(pr_key)
+
+        # Advance the watermark only on success.
+        last_polled[repo] = cycle_start
 
     state["seen_ids"] = list(seen)
-    state["initialized_prs"] = list(initialized)
+    state["last_polled_at"] = last_polled
 
 
 def main():
@@ -361,13 +414,10 @@ def main():
 
     state = load_state()
     if args.init:
-        # First-time: walk all events, mark them seen, never push.
-        for repo, pr, _author in discover_open_prs(WATCHED_REPOS):
-            for ev in fetch_pr_events(repo, pr):
-                state["seen_ids"].append(f"{ev['kind']}:{ev['id']}")
-            state["initialized_prs"].append(f"{repo}#{pr}")
+        stamp = now_iso()
+        state["last_polled_at"] = {repo: stamp for repo in WATCHED_REPOS}
         save_state(state)
-        print(f"initialized: {len(state['seen_ids'])} events seen, {len(state['initialized_prs'])} PRs tracked")
+        print(f"initialized: last_polled_at={stamp} for {len(WATCHED_REPOS)} repo(s)")
         return
 
     interval = args.loop if args.loop > 0 else POLL_INTERVAL
@@ -395,9 +445,9 @@ PY_EOF
 chmod +x "$INSTALL_DIR/bin/gh-pr-watcher.py"
 ```
 
-### 5. Initialize state (bootstrap — silently mark existing PR events as "seen")
+### 5. Initialize state (bootstrap — stamp `last_polled_at = now()`)
 
-**Why**: without this, the first poll fires `mp send` for every comment that already existed on every open PR — blast.
+**Why**: the watcher does delta fetches via GitHub's `?since=<ts>` parameter. `--init` records the current UTC timestamp per repo so the first poll only sees events created after install — no blast of pre-existing comments. (Without this stamp, the first poll's `since` would be missing and the auto-bootstrap inside `poll_once` would still skip the first cycle, but running `--init` explicitly is cheaper and clearer.)
 
 ```bash
 python3 "$INSTALL_DIR/bin/gh-pr-watcher.py" --init
@@ -407,7 +457,7 @@ python3 "$INSTALL_DIR/bin/gh-pr-watcher.py" --init
 
 ```bash
 INSTALL_DIR="${INSTALL_DIR:-$HOME/mypeople}"
-POLL_INTERVAL="${POLL_INTERVAL:-60}"
+POLL_INTERVAL="${POLL_INTERVAL:-15}"
 nohup python3 -u "$INSTALL_DIR/bin/gh-pr-watcher.py" --loop "$POLL_INTERVAL" \
   > "$INSTALL_DIR/run/gh-pr-watcher.log" 2>&1 &
 echo $! > "$INSTALL_DIR/run/gh-pr-watcher.pid"
@@ -450,7 +500,9 @@ echo "VERIFY_OK"
 
 **Approve-command fired but `gh pr review --approve` returned non-zero** → likely "Can not approve your own pull request" (GitHub forbids self-approval) or the PR is in a state that doesn't allow reviews. Inspect `$INSTALL_DIR/run/gh-pr-watcher.log` for the stderr.
 
-**First start floods Boss with hundreds of notifications** → you skipped Step 5 (`--init`). Stop the daemon, run `--init`, restart.
+**First start floods Boss with hundreds of notifications** → unlikely with the delta-fetch implementation: if `last_polled_at` is missing for a repo, the first poll stamps `now()` and skips. But if you wanted a tighter watermark before launch, stop the daemon, `rm "$INSTALL_DIR/run/gh-pr-watcher-state.json"`, run `--init`, restart.
+
+**Daemon was offline for hours; restarts and floods Boss with backlog** → expected behavior of `?since=<watermark>`: while the daemon was down, comments were still happening. When it resumes, it catches up. To skip the backlog: stop the daemon, run `--init` to re-stamp `last_polled_at = now()`, then restart.
 
 **Auto-approves a PR you didn't want approved** → the marker matched somewhere unexpected. The regex is word-boundary anchored (`/<SELF_USER>-approve` followed by non-word, non-`-`) but a comment containing the literal marker IS the contract. To revoke: `gh pr review <pr> --request-changes --repo <repo>`. To prevent on a specific repo: remove it from `APPROVE_REPOS` in `gh-pr-watcher.env` and restart the daemon.
 

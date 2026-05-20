@@ -2,6 +2,8 @@
 
 > seed-format: 1
 
+> **You're an AI agent reading this seed.** Your job: run `## Step 0 Interview` to gather inputs, then execute every Step in order, then run the `## Verify` block in a sub-shell. On exit code 0 print `SEED_RESULT=DONE` and stop. On any blocker print `BLOCKED_REASON=<short reason>` and stop. Do not ask the user what to do with this file — that's already specified below.
+
 ## Goal
 
 Watch tracked GitHub repos for new PR comments / reviews / mentions, deliver them to the Boss via the mypeople queue, and **auto-approve** any PR whose comment contains a configurable approve-command (default `/<GITHUB_USER>-approve`) by running `gh pr review --approve`.

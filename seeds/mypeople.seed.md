@@ -513,7 +513,7 @@ def tmux_run(*args, timeout=5):
 
 
 def tmux_send_text(target, text):
-    """Bracketed-paste safe send + Enter, with pane-state defense.
+    """Bracketed-paste safe send + Enter, with symmetric pane-state defense.
 
     Single biggest historical source of unreliability: typing into a pane
     that's in tmux's copy-mode (user scrolled with the mouse, selected text,
@@ -521,9 +521,11 @@ def tmux_send_text(target, text):
     copy-mode commands instead of the TUI's input buffer — silent failure
     that's invisible to the sender.
 
-    Defense (one step, tmux-primitive only, no TUI-specific assumptions):
-    if `pane_in_mode == 1`, send `-X cancel` to return the pane to its
-    primary buffer before typing. Works for any TUI in any pane.
+    Defense (tmux-primitive only, no TUI-specific assumptions): if
+    `pane_in_mode == 1`, send `-X cancel` to return the pane to its primary
+    buffer. Apply the check BOTH before typing (so the paste lands) AND
+    after Enter (so the pane is left clean for any human who picks it up
+    next — `pane_in_mode == 0` is an invariant of this function's return).
     """
     # Exit copy-mode / view-mode if active.
     r = tmux_run("display-message", "-t", target, "-p", "#{pane_in_mode}")
@@ -541,6 +543,12 @@ def tmux_send_text(target, text):
     r = tmux_run("send-keys", "-t", target, "Enter")
     if r.returncode != 0:
         return False, r.stderr.strip()
+
+    # Post-injection mirror: ensure pane is left in text-editing mode.
+    time.sleep(0.15)
+    r = tmux_run("display-message", "-t", target, "-p", "#{pane_in_mode}")
+    if r.returncode == 0 and r.stdout.strip() == "1":
+        tmux_run("send-keys", "-t", target, "-X", "cancel")
     return True, ""
 
 
@@ -1401,7 +1409,7 @@ echo "VERIFY_OK"
 
 **Notification never lands in Boss pane** → check that `BOSS_ID` env var was set on the worker (`tmux capture-pane -t mc-main:worker-1 -p -S -100 | grep BOSS_ID`); check queue-client log for the inbound send task targeting Boss; check queue-server log for the POST from emit-event.
 
-**Pane in copy-mode swallowed our send** → the target pane was scrolled (mouse wheel, manual entry, etc.) which puts tmux in copy/view-mode (`#{pane_in_mode}=1`). In that state `send-keys` types INTO copy-mode commands instead of the TUI's input buffer — silent failure. `tmux_send_text` auto-exits via `send-keys -X cancel` before every paste. Keep this defense. It's the single biggest reliability fix for this class of system.
+**Pane in copy-mode swallowed our send** → the target pane was scrolled (mouse wheel, manual entry, etc.) which puts tmux in copy/view-mode (`#{pane_in_mode}=1`). In that state `send-keys` types INTO copy-mode commands instead of the TUI's input buffer — silent failure. `tmux_send_text` auto-exits via `send-keys -X cancel` before every paste, AND mirrors the check after Enter so the pane is returned to text-editing mode for any human who picks it up next. Invariant: `pane_in_mode == 0` on every successful return of `tmux_send_text`. Keep both halves of this defense.
 
 **macOS: `tailscale: command not found` but `/Applications/Tailscale.app` exists** → the Tailscale.app GUI is installed but its bundled CLI isn't symlinked into `PATH`. Two fixes:
 - (Preferred) Open Tailscale.app → preferences → enable "Install CLI". Creates `/usr/local/bin/tailscale` pointing into the app bundle. Single source of truth.

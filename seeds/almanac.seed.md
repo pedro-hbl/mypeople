@@ -1,9 +1,9 @@
 # SEED: almanac
 
-> A self-contained product-spec "seed" for **Almanac** — a Next.js 14 design-review app (Google/@plow.co auth,
-> anchored comment pins on iframed artifacts, presence, and an agent-reviewer API). **To build:** hand this
-> file to a coding agent — it builds the app and self-runs the §16 acceptance journeys. **Hardened:** a blind,
-> zero-context agent reproduced it **one-shot — 22/22 §16 journeys PASS** (25 tests, real headless-browser Playwright).
+> A self-contained product-spec "seed" for **Almanac** — a Next.js 14 design-review app (Google/@plow.co auth, anchored comment pins on iframed artifacts, presence, agent-reviewer API).
+> **To build:** hand this file to a coding agent — it builds the app and self-runs the §16 acceptance journeys.
+> **Hardened (v2):** a blind, zero-context agent reproduced it **one-shot — 27/27 §16 journeys PASS** (22 functional + 5
+> visual-fidelity), real headless-browser Playwright, with the §9 design system reproduced from the spec (computed-style + screenshot gates).
 
 > seed-format: 1
 
@@ -449,41 +449,165 @@ Backdrop + card, Esc/backdrop-click to close (unless busy), focus first field on
 
 ---
 
-## 9. Design system (fixed tokens)
+## 9. Design system (reproducible spec — get the *feel* right, not just the tokens)
 
-**Palette** (`:root`, lifted from plow.co):
-- `--midnight: #01000a`, `--volt: #d5ef8a`, `--grove: #5e7a5e`, `--grove-light: #e8ede8`,
-  `--grove-deep: #4a6149`, `--iris: #c4bfff`.
-- Surfaces: `--chalk: #fafaf7` (page bg), `--oat: #f3f3ee`, `--card-bg: #fff`,
-  `--card-border: #e5e5e0`, `--card-border-deep: #d7d7cf`, `--rule: #eceae2`.
-- Text: `--text: #212121`, `--text-emphasis: #181818`, `--text-muted: #6b6b6b`,
-  `--text-light: #8e8e8e`. Semantic: `--danger: #ff3b30`.
+> **Why this section is long.** A correct rebuild is not just the right colors — it's the
+> right **fonts + weights**, the **micro-interactions** (every interactive element lifts,
+> tints, or reveals on hover), the **transition feel** (one shared easing, a small set of
+> durations), and a consistent **shadow/spacing/radius rhythm**. The real app is a light,
+> editorial, Plow-branded surface where *everything moves a little* on hover and nothing
+> moves a lot. Reproduce the **values and rules** below; you do not need the original CSS.
 
-**Type**: `--serif: 'Instrument Serif', Georgia, serif` (italic for headings/wordmarks);
-`--sans: 'DM Sans', system-ui, …` (body, 15px / 1.55); `--mono: 'DM Mono', 'SF Mono',
-Consolas, monospace` (pins, counts, meta). Load the three from Google Fonts; degrade to
-system fallbacks offline.
+### 9.1 Palette (exact)
 
-**Geometry**: `--radius-sm:4px / --radius:8px / --radius-lg:12px`. **Selection**: volt bg /
-midnight text.
+- **Brand**: `--midnight #01000a` · `--volt #d5ef8a` (lime accent) · `--grove #5e7a5e` ·
+  `--grove-light #e8ede8` · `--grove-deep #4a6149` · `--iris #c4bfff`.
+- **Surfaces**: `--chalk #fafaf7` (page bg) · `--oat #f3f3ee` (hover/secondary fill) ·
+  `--card-bg #ffffff` · `--card-border #e5e5e0` · `--card-border-deep #d7d7cf` ·
+  `--rule #eceae2` (hairline dividers).
+- **Text**: `--text #212121` · `--text-emphasis #181818` · `--text-muted #6b6b6b` ·
+  `--text-light #8e8e8e`. **Semantic**: `--danger #ff3b30`.
+- **Derived hover shades (exact)**: midnight button hover `#15131f`; volt button hover
+  `#c4e07b`; volt-tint hover wash `rgba(213,239,138,0.32)`; volt focus-ring
+  `rgba(213,239,138,0.40–0.45)`.
+- The app is a **light theme**. `::selection` = volt bg / midnight text.
 
-**Film-grain overlay**: a fixed full-viewport `body::after`, `z-index:1000`,
-`pointer-events:none`, `opacity:0.025`, `mix-blend-mode:multiply`, an **inline SVG
-feTurbulence data-URI** (so nothing is fetched). The app is a **light** theme.
+### 9.2 Typography (the fonts are part of the brand — pin them)
 
-**Pin / cluster CSS** (fixed): pin = 24px volt circle, midnight 1.5px border, DM-Mono 11px;
-`:hover` scale 1.12; `[data-dragging]` scale 1.18 + deeper shadow; `.provisional` = white
-dashed + pulse; `[data-resolved]` = grove-light bg / grove text / 0.7 opacity; `[data-flash]`
-= 900ms volt outline flash. Cluster = 30px midnight square with a round avatar glyph inset +
-a small volt `+N` count badge bottom-right.
+Three families, **loaded from Google Fonts via a `<link>`** in `<head>` (with
+`preconnect` to `fonts.googleapis.com` + `fonts.gstatic.com`). Load **these exact weight
+axes** — the wrong weights are the single biggest cause of "the fonts look off":
 
-**Emoji** — two scopes:
-- **Quick reactions** (the canonical `EMOJI` set, used for aggregate rollups): exactly
+```
+family=DM+Mono:wght@400;500;600
+&family=DM+Sans:wght@400;500;600;700
+&family=Instrument+Serif:ital@0;1   ← both upright AND italic
+&display=swap
+```
+
+- **`--serif`** = `'Instrument Serif', Georgia, serif` — **used italic** for all display
+  headings + wordmarks (brand, hero `h1`, page titles, footer wordmark). Headings are
+  weight **400** (the face is light by design — do **not** bold it).
+- **`--sans`** = `'DM Sans', system-ui, -apple-system, sans-serif` — body, buttons,
+  comment text, breadcrumbs. Base body = **15px / line-height 1.55**, weight 400; emphasis
+  weight 500; strongest 600–700.
+- **`--mono`** = `'DM Mono', 'SF Mono', Consolas, monospace` — all meta/labels/counts:
+  pins, version-bar hint, breadcrumb separators, status pills, eyebrows, `.kbd`, footer,
+  viewer counts. Mono labels are typically **uppercase** with **letter-spacing 0.04–0.12em**.
+- Degrade gracefully to the system fallbacks offline.
+
+**Type scale (exact sizes / weights / tracking):**
+
+| Role | Family / style | Size · weight · tracking |
+|---|---|---|
+| Hero `h1` (index "projects") | serif italic | **52px** · 400 · `-0.01em` · lh 1.05 (→ **36px** ≤720px) |
+| Project-head `h1` | serif italic | **42px** · 400 · lh 1.05 |
+| Auth wordmark | serif italic | **38px** · 400 · lh 1 |
+| Brand wordmark (top bar) | serif italic | **22px** · 400 |
+| Footer wordmark | serif italic | **18px** |
+| Project-row / version-card name | sans | **22px** · 500 · `-0.005em` |
+| Body / comment text | sans | **15px** (comments ~14px) · 400 · lh 1.55 |
+| Breadcrumb | sans | **14px**; parents 400 muted, current 500 midnight |
+| Meta / counts | mono | **12px** · `0.02em` |
+| Eyebrow / status pill | mono uppercase | **11px** · `0.08–0.12em` |
+| `.kbd`, micro, gate-micro | mono uppercase | **10px** · `0.04–0.1em` |
+
+### 9.3 Motion — one easing, a small duration ladder (this is the missing "feel")
+
+**Every** transition uses **`ease-out`**. Durations come from a fixed ladder — match them:
+
+- **180ms** — the **default** for almost everything (color, background, transform, border).
+  When unsure, use `…180ms ease-out`.
+- **160ms / 150ms / 140ms** — tighter micro-interactions (small icon buttons, chips,
+  emoji-cell, menu items, focus rings).
+- **220ms** — layout-scale motion: the activity-panel slide (`padding-right`) and the
+  undo-toast entrance.
+- **120ms** — snappy taps.
+- **1200ms ease-in-out, infinite** — the *provisional* (placing) pin pulse only.
+
+**Keyframes (4, exact behavior):**
+- `pop-in` (popovers/menus): **180ms ease-out both**, `opacity 0→1` + `translateY(-4px)→0`.
+- `undo-toast-in`: **220ms ease-out**, `opacity 0→1` + `translate(-50%,8px)→(-50%,0)`.
+- `pin-pulse` (provisional pin): scale `1 ↔ 1.12` at 50%, around `translate(-50%,-50%)`.
+- `sheet-up`: mobile bottom-sheet entrance for the panel (slide up).
+
+**Hover/active/disabled rules — apply consistently (this is what "felt missing"):**
+
+| Element | hover | active / state |
+|---|---|---|
+| Primary button `.btn` (midnight) | `translateY(-1px)` + bg→`#15131f` | active `translateY(0)` |
+| Volt button | bg→`#c4e07b` | — |
+| Secondary button | bg→`--oat` | — |
+| "+ Comment" toggle | bg→`--oat` + `translateY(-1px)` | active = **volt fill**, midnight border |
+| "+ new project" CTA (midnight pill) | `translateY(-1px)` + bg→`#1a1923` | — |
+| Breadcrumb crumb | text→midnight + **volt-tint wash** `rgba(213,239,138,0.32)` bg | current = midnight 500, no hover |
+| Project-row | **`padding-left: 8px`** (whole row nudges right) | — |
+| Project-row arrow ("open →") | color→midnight + **`translateX(4px)`** | — |
+| Version/option card | border→midnight + **`translateY(-2px)`** + shadow deepens | — |
+| Card "open →" | color→midnight + `translateX(3px)` | — |
+| Inline-rename **pencil** | **revealed only on row/card hover** (hidden at rest) | — |
+| Status pill / status chip | text or border → midnight | disabled select `opacity 0.55`, cursor progress |
+| Small icon buttons (react ☺+, ✓ resolve, ⋯) | bg/oat tint | resolve `[data-active]` = volt/midnight |
+| Text input / textarea | — | `:focus` border→midnight; some inputs add a **volt focus-ring** `0 0 0 3px rgba(213,239,138,0.45)` |
+| Identity "who" / sign-out, footnotes | muted→midnight | — |
+
+Rule of thumb to converge: **interactive = lifts (`translateY(-1px..-2px)`), tints (oat or
+volt-wash), or reveals (pencil/arrow), on a 180ms ease-out.** Directional affordances
+("open →", "← back") **translate** toward their direction on hover.
+
+### 9.4 Geometry, spacing & shadows
+
+- **Radius**: `--radius-sm 4px` (crumbs, kbd, small chips) · `--radius 8px` (inputs) ·
+  `--radius-lg 12px` (cards, popovers, modals) · **`999px`** for all pills/buttons/avatars.
+- **Borders**: hairlines use `--rule`; cards `--card-border`; emphasized `--card-border-deep`
+  or `--midnight` (1px, except pins/volt buttons at **1.5px** midnight).
+- **Spacing rhythm** (reproduce the rhythm, not pixel-pedantic): page frame max-width
+  **980px** (`.wide` 1180px), `padding 0 24px`. Top bar / version bar min-height **56px / 52px**.
+  Hero pad `56px 0 24px`; project-head `40px 0 8px`; project rows `22px 0` with a bottom
+  `--rule`; card grids `gap 20px`, cards `padding ~22px 24px`; buttons `7–11px × 14–18px`;
+  pills `7px 14px`. Activity panel = **340px** desktop drawer (iframe reflows via
+  `padding-right`), bottom-sheet ≤720px.
+- **Shadow ladder (exact — soft, midnight-tinted, low-spread):**
+  - Pin (rest): `0 2px 6px rgba(1,0,10,0.18)`; dragging: deepen to `0 8px 18px rgba(1,0,10,0.32)`.
+  - Card hover: `0 14px 30px rgba(1,0,10,0.08→0.18)`.
+  - Popover / dropdown menu: `0 14px 40px -8px rgba(1,0,10,0.18), 0 2px 8px rgba(1,0,10,0.06)`.
+  - Activity panel (left edge): `-14px 0 32px -16px rgba(1,0,10,0.18)`.
+  - Cluster pop-list / undo toast: `0 16px 36px -10px rgba(1,0,10,0.32)`.
+  - Modal card: `0 24px 60px rgba(1,0,10,0.22)`.
+  - Focus ring (volt glow): `0 0 0 3px rgba(213,239,138,0.40–0.45)`.
+
+### 9.5 Film-grain overlay (brand signature — non-negotiable)
+
+A fixed full-viewport `body::after`: `z-index 1000`, `pointer-events:none`,
+`opacity 0.025`, `mix-blend-mode:multiply`, painted from an **inline SVG `feTurbulence`
+data-URI** (`baseFrequency 0.85`, `numOctaves 2`, near-black at low alpha) so **nothing is
+fetched**. Subtle but present on every page.
+
+### 9.6 Pins, clusters & avatars (canvas identity)
+
+- **Pin**: 24px circle, **volt fill**, **1.5px midnight border**, DM-Mono 11px,
+  `translate(-50%,-50%)` centering, very high z-index, rest shadow `0 2px 6px rgba(1,0,10,.18)`.
+  `:hover` scale **1.12**; `[data-dragging]` scale **1.18** + deep shadow + `cursor:grabbing`;
+  `.provisional` (placing) = white + **dashed** border + `pin-pulse`; `[data-resolved]` =
+  grove-light bg / grove text / **0.7 opacity** (→1 on hover); `[data-flash]` = **900ms** volt
+  outline flash (jump-to-pin).
+- **Cluster glyph**: 30px **midnight square** with the top member's round avatar inset + a
+  small **volt `+N`** count badge bottom-right.
+- **Avatars** (pins, popover, panel, viewer stack): a Google profile **image** (round,
+  `object-fit:cover`) when present, else **deterministic-color initials**. Color =
+  `hsl(<hash(email||name)> % 360, 40%, 70%)`. Initials: one word → first 2 chars upper;
+  ≥2 words → first + last initial. Sizes: pin glyph 24px; `.fig-avatar.lg` **36px** /
+  `.fig-avatar.sm` **24px**; viewer-stack avatars overlap with a `+N` overflow past 5.
+
+### 9.7 Emoji — two scopes
+
+- **Quick reactions** (the canonical `EMOJI` set used for aggregate rollups): exactly
   **`["👍","👎","🔥","🤔","❤️"]`**.
 - **EmojiPicker** (the add-reaction surface): a curated **in-house set (~80 emoji)** across
-  three categories ("Smileys & People", "Hearts & Reactions", "Symbols") with substring
-  keyword **search** and a **"Frequently used"** row backed by `localStorage` key
-  `almanac.emoji.freq.v1` (max 12). No emoji library dependency. Picking closes the picker.
+  three categories ("Smileys & People", "Hearts & Reactions", "Symbols"), substring keyword
+  **search**, and a **"Frequently used"** row backed by `localStorage` key
+  `almanac.emoji.freq.v1` (max 12). **No emoji-picker library** (keeps the bundle lean).
+  Picking closes the picker. Emoji cells tint on hover (~140ms).
 
 ---
 
@@ -727,6 +851,34 @@ Each states an action and the observable expected result. Manual or headless (Pl
 22. **Agent resolve / delete.** `PATCH /api/agent-comments/<id>` flips resolved (no author
     check); `DELETE` with the matching `x-almanac-agent-author` prunes it. Targeting a
     **human** comment ⇒ **409 not-agent**.
+
+### Visual fidelity (the rebuild must *look* like §9, not just function)
+
+Functional journeys 1–22 pass even on a wrong-looking build, so add these. Two tiers:
+**computed-style assertions** (deterministic, primary) and **screenshot diff** (high-fidelity
+gate, secondary). All run after a `@plow.co` test session is established.
+
+23. **Fonts resolve correctly.** Via `getComputedStyle`: `body` `font-family` resolves to a
+    **DM Sans** stack; the hero/page-title `h1` resolves to **Instrument Serif** with
+    `font-style: italic` and `font-weight: 400`; a mono label (status pill / `.kbd`) resolves
+    to **DM Mono**. *Expect:* exact matches — this is what "the fonts look distinct" was.
+24. **Tokens + shadows exact.** Computed `--volt` = `rgb(213,239,138)`; page bg = chalk;
+    a card's `box-shadow` and a popover's `box-shadow` match the §9.4 ladder; radius on a
+    card = 12px, on a pill = 999px.
+25. **Hover micro-interactions fire.** Programmatic hover + computed-style/bounding-box diff:
+    `.project-row` gains `padding-left: 8px` and its arrow `translateX(4px)`; a breadcrumb
+    crumb gains the volt-tint wash `rgba(213,239,138,0.32)`; the "+ Comment" toggle lifts
+    `translateY(-1px)`; a card lifts `translateY(-2px)`; the rename **pencil** is hidden at
+    rest and becomes visible on row hover. *Expect:* each state change observed (not just
+    "element exists").
+26. **Transition feel.** Computed `transition-duration`/`timing-function` on the sampled
+    interactive elements are from the §9.3 ladder (default **180ms ease-out**; panel slide
+    **220ms**). *Expect:* no `0s`/`linear` defaults left on interactive elements.
+27. **Screenshot diff (gate, ~0.2% threshold).** Baselines of: index, version-bar +
+    iframe, an open pin popover, the activity panel, a modal. Compared with Playwright
+    `toHaveScreenshot`. *Expect:* within threshold vs the captured-from-real baselines;
+    flags spacing/shadow/layout drift the computed checks can't. (Secondary — environment
+    sensitive; computed-style tiers 23–26 are the hard gate.)
 
 ---
 

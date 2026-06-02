@@ -393,7 +393,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if not host:
                 return self._json(400, {"error": "hostname required"})
             with _lock:
-                clients[host] = {"ts": time.time()}
+                entry = {"ts": time.time()}
+                attach_base = (data.get("attach_base") or "").strip()
+                if attach_base:
+                    entry["attach_base"] = attach_base
+                clients[host] = entry
             return self._json(200, {"ok": True})
 
         if p == "/agents/register":
@@ -486,6 +490,7 @@ SECRET = os.environ.get("QUEUE_SECRET", "")
 HEARTBEAT = int(os.environ.get("QUEUE_HEARTBEAT", "30"))
 POLL_INTERVAL = float(os.environ.get("QUEUE_POLL_INTERVAL", "1.0"))
 HOSTNAME = os.environ.get("HOST_ID", "") or socket.gethostname()
+TTYD_PUBLIC_URL = os.environ.get("TTYD_PUBLIC_URL", "")  # browser-reachable ttyd base for this host (e.g. its Tailscale addr); empty -> HUD falls back to localhost
 INSTALL_DIR = os.environ.get("INSTALL_DIR", os.path.expanduser("~/mypeople"))
 PLUGIN_DIR = os.path.join(INSTALL_DIR, "plugins", "tmux-boss-hooks")
 
@@ -514,7 +519,7 @@ def get_json(path):
 def heartbeat_loop():
     while True:
         try:
-            post_json("/heartbeat", {"hostname": HOSTNAME})
+            post_json("/heartbeat", {"hostname": HOSTNAME, "attach_base": TTYD_PUBLIC_URL})
         except urllib.error.URLError as e:
             print(f"{time.strftime('%H:%M:%S')} heartbeat FAIL: {e}", file=sys.stderr, flush=True)
         time.sleep(HEARTBEAT)
@@ -1121,10 +1126,16 @@ async function getJson(path) {
 async function refresh() {
   try {
     const [a, c] = await Promise.all([getJson('/agents'), getJson('/clients')]);
-    const ttydHost = location.hostname || '127.0.0.1';
+    const clientMap = {};
+    (c || []).forEach(cl => { clientMap[cl.hostname] = cl; });
+    const localBase = `http://${location.hostname || '127.0.0.1'}:7681`;
     const rows = a.map(x => {
       const target = x.tmux_target || '';
-      const url = `http://${ttydHost}:7681/?arg=-t&arg=${encodeURIComponent(target)}`;
+      // per-host attach: a cross-host/container node uses the ttyd base it
+      // advertises (its Tailscale addr); same-host falls back to localhost.
+      const cl = clientMap[x.host];
+      const base = (cl && cl.attach_base) ? cl.attach_base : localBase;
+      const url = `${base}/?arg=-t&arg=${encodeURIComponent(target)}`;
       const safeSummary = (x.summary || '').replace(/[<>&]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[c])).slice(0, 120);
       return `<tr>
         <td><code>${x.agent_id}</code></td>

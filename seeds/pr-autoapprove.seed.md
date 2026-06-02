@@ -23,7 +23,7 @@ If either is missing: `BLOCKED_REASON=mypeople_not_installed` or `BLOCKED_REASON
 
 - `~/mypeople/bin/gh-pr-watcher.py` exists and is executable.
 - `~/.config/mypeople/gh-pr-watcher.env` contains `WATCHED_REPOS`, `SELF_USER`, `APPROVE_COMMAND`, `POLL_INTERVAL`, `BOSS_TARGET`.
-- A `gh-pr-watcher` daemon process is alive (poll loop running). PID file at `~/mypeople/run/gh-pr-watcher.pid`.
+- A `gh-pr-watcher` daemon process is alive (poll loop running), **supervised** so it survives sleep / reboot / network blips: a launchd LaunchAgent (`com.mypeople.gh-pr-watcher`) on macOS, or a systemd `--user` unit (`gh-pr-watcher.service`) on Linux, both with restart-on-exit. The supervisor — not a bare PID file — owns the process lifecycle.
 - State file `~/mypeople/run/gh-pr-watcher-state.json` exists; first run initializes seen-ids without spamming.
 - Smoke: comment `/<SELF_USER>-approve` on a tracked test PR → within `POLL_INTERVAL`+`gh latency` seconds:
   - `gh pr view <pr> --json reviews` shows a review by SELF_USER with state APPROVED;
@@ -72,6 +72,13 @@ gh auth status >/dev/null 2>&1 || { echo "BLOCKED_REASON=gh_not_authed (run: gh 
 
 ```bash
 INSTALL_DIR="${INSTALL_DIR:-$HOME/mypeople}"
+# Stop the supervisor FIRST on idempotent re-install, or it will relaunch the
+# process the moment we kill it below. Step 6 re-creates it cleanly.
+case "$(uname -s)" in
+  Darwin) launchctl bootout "gui/$(id -u)/com.mypeople.gh-pr-watcher" 2>/dev/null || true ;;
+  Linux)  systemctl --user disable --now gh-pr-watcher.service 2>/dev/null || true ;;
+esac
+# Legacy bare-nohup PID file from pre-supervisor installs.
 [ -f "$INSTALL_DIR/run/gh-pr-watcher.pid" ] && kill "$(cat $INSTALL_DIR/run/gh-pr-watcher.pid)" 2>/dev/null || true
 pkill -f "$INSTALL_DIR/bin/gh-pr-watcher.py" 2>/dev/null || true
 ```
@@ -453,17 +460,114 @@ chmod +x "$INSTALL_DIR/bin/gh-pr-watcher.py"
 python3 "$INSTALL_DIR/bin/gh-pr-watcher.py" --init
 ```
 
-### 6. Start the watcher daemon
+### 6. Start the watcher daemon **under a supervisor** (reboot-proof)
+
+**Why a supervisor, not `nohup &`**: a bare `nohup python3 ... &` has no one to restart it. The watcher runs a long-lived poll loop that makes network calls every `POLL_INTERVAL` seconds; a laptop sleep, a Wi-Fi blip, a transient `error connecting to api.github.com`, or a reboot can kill the loop, and nothing brings it back — auto-approval silently dies until someone notices. Install it under the host's init supervisor with **restart-on-exit** so it self-heals and comes up on boot/login.
+
+Pick the supervisor for THIS host:
+
+- **macOS → launchd LaunchAgent** (`KeepAlive` = restart on any exit, `RunAtLoad` = start on login).
+- **Linux → systemd `--user` unit** (`Restart=always`, `WantedBy=default.target`; `loginctl enable-linger <user>` so it runs without an active login session, matching the always-on intent).
+- **Other / no init supervisor** → fall back to the legacy `nohup` form documented at the end of this Step, but log that the watcher is **NOT reboot-proof** on this host.
+
+Use the absolute path to `python3` (a supervisor's `PATH` is minimal) and export `PATH` so the watcher's `gh` subprocess calls resolve.
 
 ```bash
 INSTALL_DIR="${INSTALL_DIR:-$HOME/mypeople}"
 POLL_INTERVAL="${POLL_INTERVAL:-15}"
-nohup python3 -u "$INSTALL_DIR/bin/gh-pr-watcher.py" --loop "$POLL_INTERVAL" \
-  > "$INSTALL_DIR/run/gh-pr-watcher.log" 2>&1 &
-echo $! > "$INSTALL_DIR/run/gh-pr-watcher.pid"
-sleep 2
-ps -p "$(cat $INSTALL_DIR/run/gh-pr-watcher.pid)" -o pid,command 2>&1
+PY="$(command -v python3)"; GH_DIR="$(dirname "$(command -v gh)")"
+WATCHER="$INSTALL_DIR/bin/gh-pr-watcher.py"
+LOG="$INSTALL_DIR/run/gh-pr-watcher.log"
+OS="$(uname -s)"
+
+# A stale bare-nohup PID file from a previous (unsupervised) install is no longer
+# the source of truth — the supervisor owns liveness now. Remove it to avoid confusion.
+rm -f "$INSTALL_DIR/run/gh-pr-watcher.pid"
+
+if [ "$OS" = "Darwin" ]; then
+  # ── macOS: launchd LaunchAgent ──────────────────────────────────────────
+  LABEL="com.mypeople.gh-pr-watcher"
+  PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
+  mkdir -p "$HOME/Library/LaunchAgents"
+  cat > "$PLIST" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key><string>$LABEL</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>$PY</string>
+        <string>-u</string>
+        <string>$WATCHER</string>
+        <string>--loop</string>
+        <string>$POLL_INTERVAL</string>
+    </array>
+    <key>RunAtLoad</key><true/>
+    <key>KeepAlive</key><true/>
+    <key>ThrottleInterval</key><integer>10</integer>
+    <key>WorkingDirectory</key><string>$HOME</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key><string>$HOME</string>
+        <key>INSTALL_DIR</key><string>$INSTALL_DIR</string>
+        <key>PATH</key><string>$GH_DIR:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>LANG</key><string>C.UTF-8</string>
+    </dict>
+    <key>StandardOutPath</key><string>$LOG</string>
+    <key>StandardErrorPath</key><string>$LOG</string>
+</dict>
+</plist>
+EOF
+  plutil -lint "$PLIST"
+  UID_N="$(id -u)"
+  launchctl bootout "gui/$UID_N/$LABEL" 2>/dev/null || true   # idempotent re-install
+  launchctl bootstrap "gui/$UID_N" "$PLIST"
+  launchctl enable "gui/$UID_N/$LABEL"
+  launchctl kickstart -k "gui/$UID_N/$LABEL"
+  sleep 2
+  launchctl print "gui/$UID_N/$LABEL" 2>&1 | grep -E 'state =|pid =' | head
+
+elif [ "$OS" = "Linux" ]; then
+  # ── Linux: systemd --user unit ──────────────────────────────────────────
+  UNIT_DIR="$HOME/.config/systemd/user"
+  mkdir -p "$UNIT_DIR"
+  cat > "$UNIT_DIR/gh-pr-watcher.service" <<EOF
+[Unit]
+Description=mypeople gh-pr-watcher (PR auto-approve + Boss notify)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+Environment=INSTALL_DIR=$INSTALL_DIR
+Environment=PATH=$GH_DIR:/usr/local/bin:/usr/bin:/bin
+ExecStart=$PY -u $WATCHER --loop $POLL_INTERVAL
+Restart=always
+RestartSec=10
+StandardOutput=append:$LOG
+StandardError=append:$LOG
+
+[Install]
+WantedBy=default.target
+EOF
+  loginctl enable-linger "$(whoami)" 2>/dev/null || true   # run without an active login session
+  systemctl --user daemon-reload
+  systemctl --user enable --now gh-pr-watcher.service
+  sleep 2
+  systemctl --user --no-pager status gh-pr-watcher.service | head -5
+
+else
+  # ── Fallback: no known init supervisor — NOT reboot-proof ────────────────
+  echo "WARN: unknown OS '$OS' — no supervisor available; starting bare nohup (NOT reboot-proof)."
+  nohup "$PY" -u "$WATCHER" --loop "$POLL_INTERVAL" > "$LOG" 2>&1 &
+  echo $! > "$INSTALL_DIR/run/gh-pr-watcher.pid"
+  sleep 2
+  ps -p "$(cat $INSTALL_DIR/run/gh-pr-watcher.pid)" -o pid,command 2>&1
+fi
 ```
+
+The supervisor relaunches the watcher on any exit (crash, network error, sleep-wake) and starts it automatically on boot/login — so auto-approval stays live without manual intervention. Inspect logs the same way regardless of supervisor: `tail -f "$INSTALL_DIR/run/gh-pr-watcher.log"`.
 
 ## Verify
 
@@ -472,8 +576,15 @@ ps -p "$(cat $INSTALL_DIR/run/gh-pr-watcher.pid)" -o pid,command 2>&1
 set -e
 INSTALL_DIR="${INSTALL_DIR:-$HOME/mypeople}"
 
-# 1. Daemon alive
-ps -p "$(cat $INSTALL_DIR/run/gh-pr-watcher.pid)" -o command= 2>/dev/null | grep -q gh-pr-watcher.py || { echo "FAIL: gh-pr-watcher daemon not running"; exit 1; }
+# 1. Daemon alive AND supervised (survives reboot). Check the process exists, then
+#    confirm a supervisor owns it (launchd on macOS / systemd --user on Linux).
+pgrep -f "$INSTALL_DIR/bin/gh-pr-watcher.py" >/dev/null || { echo "FAIL: gh-pr-watcher daemon not running"; exit 1; }
+case "$(uname -s)" in
+  Darwin) launchctl print "gui/$(id -u)/com.mypeople.gh-pr-watcher" 2>/dev/null | grep -q 'state = running' \
+            || { echo "FAIL: watcher running but not supervised by launchd — will NOT survive reboot"; exit 1; } ;;
+  Linux)  systemctl --user is-active --quiet gh-pr-watcher.service \
+            || { echo "FAIL: watcher running but not supervised by systemd — will NOT survive reboot"; exit 1; } ;;
+esac
 
 # 2. Config + state files
 [ -s "$HOME/.config/mypeople/gh-pr-watcher.env" ] || { echo "FAIL: gh-pr-watcher.env missing"; exit 1; }
@@ -487,14 +598,18 @@ mp status >/dev/null 2>&1 || { echo "FAIL: mypeople queue unreachable"; exit 1; 
 
 # 5. Sample log line to prove the daemon completed at least one poll
 sleep "$(( $(grep ^POLL_INTERVAL= $HOME/.config/mypeople/gh-pr-watcher.env | cut -d= -f2-) + 5 ))"
-grep -q '^poll:' "$INSTALL_DIR/run/gh-pr-watcher.log" || { echo "FAIL: no 'poll:' line in log — watcher never completed a poll"; tail -20 "$INSTALL_DIR/run/gh-pr-watcher.log"; exit 1; }
+grep -q '^poll\[' "$INSTALL_DIR/run/gh-pr-watcher.log" || { echo "FAIL: no 'poll[<repo>]' line in log — watcher never completed a poll"; tail -20 "$INSTALL_DIR/run/gh-pr-watcher.log"; exit 1; }
 
 echo "VERIFY_OK"
 ```
 
 ## Failure modes
 
-**`gh: command not found`** → `gh` CLI not installed. macOS: `brew install gh`. Debian: `sudo apt-get install gh`.
+**Watcher died and never came back (the bug this seed used to have)** → the daemon must run under a supervisor (Step 6), not a bare `nohup &`. Confirm it's supervised: macOS `launchctl print "gui/$(id -u)/com.mypeople.gh-pr-watcher"` should show `state = running` with a `pid`; Linux `systemctl --user status gh-pr-watcher.service` should show `active (running)`. If a `gh-pr-watcher` process is alive but neither supervisor knows about it, you're on a legacy bare-nohup start — re-run Step 6 to install the supervisor.
+
+**Supervisor restart-loops (process exits immediately, keeps relaunching)** → check the log for the crash. Common causes: `python3`/`gh` not on the supervisor's `PATH` (Step 6 hard-codes absolute `python3` and exports `PATH` including `gh`'s dir — verify those resolve on this host), or `SELF_USER`/`WATCHED_REPOS`/`BOSS_TARGET` missing from `gh-pr-watcher.env` (the script exits non-zero on missing required config). macOS `ThrottleInterval` / Linux `RestartSec` cap the loop at one relaunch per 10s so it won't spin hot.
+
+**`gh: command not found`** → `gh` CLI not installed. macOS: `brew install gh`. Debian: `sudo apt-get install gh`. Note the supervisor runs with a minimal `PATH`; Step 6 injects `gh`'s directory, but if you installed `gh` somewhere unusual, add it to the plist/unit `PATH`.
 
 **`gh auth status` reports not logged in** → run `gh auth login` and complete the OAuth flow. The watcher uses the host user's authenticated session — no separate token.
 
@@ -512,6 +627,17 @@ echo "VERIFY_OK"
 
 ```bash
 INSTALL_DIR="${INSTALL_DIR:-$HOME/mypeople}"
+# Tear down the supervisor first so it doesn't relaunch the process we're about to kill.
+case "$(uname -s)" in
+  Darwin)
+    launchctl bootout "gui/$(id -u)/com.mypeople.gh-pr-watcher" 2>/dev/null || true
+    rm -f "$HOME/Library/LaunchAgents/com.mypeople.gh-pr-watcher.plist" ;;
+  Linux)
+    systemctl --user disable --now gh-pr-watcher.service 2>/dev/null || true
+    rm -f "$HOME/.config/systemd/user/gh-pr-watcher.service"
+    systemctl --user daemon-reload 2>/dev/null || true ;;
+esac
+# Legacy bare-nohup PID file, if any prior install left one.
 [ -f "$INSTALL_DIR/run/gh-pr-watcher.pid" ] && kill "$(cat $INSTALL_DIR/run/gh-pr-watcher.pid)" 2>/dev/null || true
 pkill -f "$INSTALL_DIR/bin/gh-pr-watcher.py" 2>/dev/null || true
 rm -f "$INSTALL_DIR/bin/gh-pr-watcher.py" "$INSTALL_DIR/run/gh-pr-watcher.pid" "$INSTALL_DIR/run/gh-pr-watcher.log" "$INSTALL_DIR/run/gh-pr-watcher-state.json"

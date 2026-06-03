@@ -1,0 +1,9 @@
+#!/bin/bash
+# Simulate the assigned engineer's Stop hook firing.
+#   sim-stop-hook <agent_id> --idle      # engineer stopped and is idle
+#   sim-stop-hook <agent_id> --working   # engineer stopped but picked up new work
+H="${TODO_HOST:-127.0.0.1:9900}"
+agent="$1"; state="idle"
+[ "$2" = "--working" ] && state="working"
+curl -fs -X POST "http://$H/hook/stop" -H "Content-Type: application/json" \
+  -d "{\"agent\":\"$agent\",\"state\":\"$state\"}" >/dev/null && echo "stop-hook($agent)=$state"

@@ -1,0 +1,39 @@
+#!/usr/bin/env python3
+"""engineer-sim — a fake engineer used ONLY by the seed's self-contained §Verify.
+
+Given a task id, it does the trivial "work" for a machine-checkable done-condition
+of the form `file <path> contains <text>` (writes <text> to <path>), attaches a
+proof, and flips the task to awaiting_verify — exactly what a real engineer would
+do via the queue. In a live runtime this role is a real `mp` engineer agent.
+
+Env: TODO_HOST, QUEUE_SECRET, SIM_FAIL=1 (produce wrong proof to exercise re-ping).
+"""
+import os, re, sys, json, time, urllib.request
+
+HOST = os.environ.get("TODO_HOST", "127.0.0.1:9900")
+SEC  = os.environ.get("QUEUE_SECRET", "")
+FAIL = os.environ.get("SIM_FAIL", "0") == "1"
+
+def post(path, body):
+    req = urllib.request.Request(f"http://{HOST}{path}", data=json.dumps(body).encode(),
+        headers={"Content-Type": "application/json", **({"X-Queue-Secret": SEC} if SEC else {})})
+    return json.load(urllib.request.urlopen(req))
+def board():
+    return json.load(urllib.request.urlopen(f"http://{HOST}/todo/board"))
+
+def main():
+    tid = sys.argv[1]; time.sleep(0.5)
+    t = board()["tasks"].get(tid)
+    if not t: return
+    cond = t.get("doneCondition", "")
+    m = re.search(r"file\s+(\S+)\s+contains\s+(.+)", cond, re.I)
+    if m:
+        path, want = m.group(1), m.group(2).strip()
+        open(path, "w").write("WRONG" if FAIL else want)
+        post("/todo/proof", {"task_id": tid, "type": "text",
+                             "ref": f"wrote {path}", "by": "sim-engineer"})
+    post("/todo/status", {"id": tid, "state": "awaiting_verify",
+                          "lastStatus": "engineer finished; awaiting verify"})
+
+if __name__ == "__main__":
+    main()

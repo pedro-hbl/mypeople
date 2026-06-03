@@ -1,0 +1,88 @@
+#!/usr/bin/env python3
+"""todo-reconcile — the deterministic mechanics of Boss Rule 4.
+
+The Boss runs this on every ping/Stop/change. It does the non-judgment parts:
+  - ready + workToDone + unassigned  -> assign an idle engineer + dispatch
+  - awaiting_verify + proof          -> auto-verify machine-checkable conditions
+Judgment parts (brainstorm wording, fuzzy verification) stay with the Boss.
+
+Env:
+  TODO_HOST       (127.0.0.1:9900)
+  QUEUE_SECRET    (sent on writes)
+  DISPATCH        'mp' (real: mp send) | 'sim' (run ENGINEER_SIM) | 'none'
+  ENGINEER_POOL   comma list of idle engineers (real: from `mp status`); default 'main:eng-1'
+  ENGINEER_SIM    path to a script run as: <script> <task_id>   (DISPATCH=sim only)
+"""
+import os, re, json, sys, subprocess, urllib.request
+
+HOST  = os.environ.get("TODO_HOST", "127.0.0.1:9900")
+SEC   = os.environ.get("QUEUE_SECRET", "")
+DISP  = os.environ.get("DISPATCH", "mp")
+POOL  = [x for x in os.environ.get("ENGINEER_POOL", "main:eng-1").split(",") if x]
+ESIM  = os.environ.get("ENGINEER_SIM", "")
+
+def board():
+    return json.load(urllib.request.urlopen(f"http://{HOST}/todo/board"))
+def post(path, body):
+    req = urllib.request.Request(f"http://{HOST}{path}", data=json.dumps(body).encode(),
+        headers={"Content-Type": "application/json", **({"X-Queue-Secret": SEC} if SEC else {})})
+    return json.load(urllib.request.urlopen(req))
+
+def pick_idle(b):
+    used = {t.get("assignee") for t in b["tasks"].values() if t.get("assignee")}
+    for e in POOL:
+        if e not in used: return e
+    return POOL[0] if POOL else None
+
+def dispatch(eng, t):
+    prompt = (f"{t['text']}\nDONE-CONDITION: {t['doneCondition']}\n"
+              f"When done, attach proof: POST /todo/proof, then POST /todo/status state=awaiting_verify.")
+    if DISP == "mp" and (sub := __import__('shutil').which("mp")):
+        subprocess.run(["mp", "send", eng, prompt], timeout=15)
+    elif DISP == "sim" and ESIM:
+        subprocess.Popen([sys.executable, ESIM, t["id"]])
+    # DISP=none: just record the assignment (the Boss will send manually)
+
+def verify_condition(cond, t):
+    """Return True/False/None. None = needs Boss judgment (not machine-checkable)."""
+    m = re.search(r"file\s+(\S+)\s+contains\s+(.+)", cond, re.I)
+    if m:
+        path, want = m.group(1), m.group(2).strip()
+        try: return want in open(path).read()
+        except Exception: return False
+    m = re.search(r"GET\s+(\S+)\s+returns\s+(\d+)", cond, re.I)
+    if m:
+        try:
+            code = urllib.request.urlopen(m.group(1), timeout=5).getcode()
+            return str(code) == m.group(2)
+        except Exception: return False
+    return None  # free-text -> Boss judges
+
+def main():
+    b = board(); acted = []
+    for tid in b.get("order", []):
+        t = b["tasks"].get(tid)
+        if not t or not t.get("workToDone") or t.get("state") == "done":
+            continue
+        st = t["state"]
+        if st == "ready" and not t.get("assignee"):
+            eng = pick_idle(b)
+            if eng:
+                post("/todo/update", {"op": "set", "id": tid, "assignee": eng})
+                post("/todo/update", {"op": "set", "id": tid, "state": "dispatched"})
+                dispatch(eng, t); acted.append(f"dispatch {tid}->{eng}")
+        elif st == "awaiting_verify" and t.get("proofs"):
+            res = verify_condition(t.get("doneCondition", ""), t)
+            if res is True:
+                post("/todo/status", {"id": tid, "verified": True, "state": "done"})
+                acted.append(f"verified+done {tid}")
+            elif res is False:
+                post("/todo/status", {"id": tid, "state": "working",
+                                      "lastStatus": "not ready because done-condition not satisfied by proof"})
+                acted.append(f"reping {tid}")
+            else:
+                acted.append(f"needs-boss-judgment {tid}")
+    print(json.dumps({"acted": acted}))
+
+if __name__ == "__main__":
+    main()

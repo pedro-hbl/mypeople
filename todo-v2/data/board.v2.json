@@ -1,0 +1,90 @@
+{
+  "version": "v2",
+  "order": [
+    "0d7b0e43a0d3",
+    "c452e034eef4",
+    "4c0d996202ef"
+  ],
+  "tasks": {
+    "4c0d996202ef": {
+      "id": "4c0d996202ef",
+      "text": "REAL: prove the board pings the central Boss",
+      "doneCondition": "central Boss receives the ping on the real queue",
+      "brainstorm": "real wiring proof",
+      "workToDone": false,
+      "assignee": "daniels-MacBook-Pro-2/postiz:eng-1",
+      "state": "done",
+      "verified": true,
+      "lastStatus": "VERIFIED by assignee per doctrine: real mp-send queue delivered ping to daniels-MacBook-Pro-2/main:Boss twice (rc=0, 'Sent') per boss-inbox.log. Closing DONE.",
+      "proofs": [
+        {
+          "id": "40e7262f70b4",
+          "type": "text",
+          "ref": "board->queue->Boss central CONFIRMADO via fila real (mp send). boss-inbox.log: 2x 'MP_SEND -> daniels-MacBook-Pro-2/main:Boss rc=0 :: Sent'. pings recebidos as 2026-06-03T15:04:38Z (epoch 1780499078205) e 2026-06-03T15:04:42Z (epoch 1780499082850). pingsToBoss=2. doneCondition 'central Boss receives the ping on the real queue' satisfeita.",
+          "caption": "REAL queue delivery to central Boss (rc=0, x2) \u2014 verified from boss-inbox.log",
+          "by": "daniels-MacBook-Pro-2/postiz:eng-1",
+          "ts": 1780499410744
+        }
+      ],
+      "subs": [],
+      "pingsToBoss": 2,
+      "assignedAt": 1780499078222,
+      "lastStopTs": 1780499078234,
+      "created": 1780499077474,
+      "updated": 1780499410746
+    },
+    "c452e034eef4": {
+      "id": "c452e034eef4",
+      "text": "Create a hello world html 1 filer only; that containers 5 rotating figures... e.g triangle yellow; red square... etc",
+      "doneCondition": "screenshot of the website in 3 different moments verify that the figures are rotating and present on the screen",
+      "brainstorm": "1-file self-contained HTML, fundo escuro, 5 formas distintas cada uma girando (CSS @keyframes, velocidades/sentidos variados): triangulo amarelo, quadrado vermelho, circulo azul, pentagono verde, estrela roxa. Abre direto no browser. Engenheiro: helloworld:eng-1.",
+      "workToDone": true,
+      "assignee": "daniels-MacBook-Pro-2/helloworld:eng-1",
+      "state": "done",
+      "verified": true,
+      "lastStatus": "Boss verificou com os proprios olhos (screenshot): 5 figuras girando, cores corretas (triangulo amarelo, quadrado vermelho, circulo azul, pentagono verde, estrela roxa), 1 arquivo self-contained. Done-condition satisfeita.",
+      "proofs": [
+        {
+          "id": "5d2ab404c7b2",
+          "type": "image",
+          "ref": "/todo/proof/c452e034eef4/5d2ab404c7b2.png",
+          "caption": "Done-condition satisfeita: 3 momentos distintos (montage) provam as 5 figuras PRESENTES e GIRANDO. Triangulo amarelo aponta CIMA->DIREITA->BAIXO; estrela roxa, circulo azul (gradiente conico), quadrado vermelho e pentagono verde em angulos diferentes em cada frame. Arquivo (1, self-contained, CSS @keyframes puro): /Users/delattre/Desktop/hello-5-rotating.html. Aberto no Safari do CEO (open -a Safari, Rule 10). Frames individuais: hello5-moment1.png / hello5-moment2.png / hello5-moment3.png no ~/Desktop.",
+          "by": "daniels-MacBook-Pro-2/helloworld:eng-1",
+          "ts": 1780504381510
+        },
+        {
+          "id": "c43b2ed957e3",
+          "type": "link",
+          "ref": "file:///Users/delattre/Desktop/hello-5-rotating.html",
+          "caption": "Entregavel: 1 arquivo HTML self-contained (sem deps externas), 5 figuras girando via CSS @keyframes. Abre direto no browser.",
+          "by": "daniels-MacBook-Pro-2/helloworld:eng-1",
+          "ts": 1780504392136
+        }
+      ],
+      "subs": [],
+      "pingsToBoss": 4,
+      "assignedAt": 1780504221962,
+      "lastStopTs": null,
+      "created": 1780503947119,
+      "updated": 1780504442056
+    },
+    "0d7b0e43a0d3": {
+      "id": "0d7b0e43a0d3",
+      "text": "Set up PTZ camera scenes (Insta360 Link 2 on sayno)",
+      "doneCondition": "When I have 3 saved positions I can tell the agent: Set the camera to X and I can see that it did; then I say set to Y; and I can see that it did; i will check the livestream to verify that the command worked) ",
+      "brainstorm": "[CEO intake \u2014 to reconcile] The in-person team is rebooting the sayno machine now (~30-60 min). Once it's back and we reconnect, set up the different camera scenes: dial in and SAVE named pan/tilt/zoom presets (angles) via the staged 'ptz' CLI (get/save/list/recall, ~/ptz-presets.json). Camera is Insta360 Link 2, UVC on /dev/video0, live-feeding 5 streams -> recall/movement needs a maintenance window. Step 1 after reboot: verify the sayno stack + 5 streams recovered. Step 2: define + save each scene angle. Likely owner: sayno:eng-2.",
+      "workToDone": true,
+      "assignee": "daniels-MacBook-Pro-2/sayno:eng-2",
+      "state": "working",
+      "verified": false,
+      "lastStatus": "Boss-assigned to sayno:eng-2. Guest messaging restored; PTZ test running (camera control + scene save/recall proof), publish proof then save CEO framings.",
+      "proofs": [],
+      "subs": [],
+      "pingsToBoss": 4,
+      "assignedAt": 1780518474554,
+      "lastStopTs": null,
+      "created": 1780511320933,
+      "updated": 1780518474557
+    }
+  }
+}

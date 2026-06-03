@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Plow — Priorities (TODO v2)</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500;700&family=DM+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet">
+<style>
+:root{
+  --midnight:#01000A; --volt:#D5EF8A; --grove:#5e7a5e; --iris:#C4BFFF;
+  --dark-bg:#111110; --dark-border:rgba(255,255,255,0.09);
+  --text-dark:#F0F0E8; --muted-dark:rgba(240,240,232,0.45);
+  --success:#34c759; --danger:#ff3b30; --warning:#febc2e; --info:#5ac8fa;
+  --volt-dim:rgba(213,239,138,0.15); --volt-glow:rgba(213,239,138,0.25);
+  --surface:rgba(255,255,255,0.05); --surface2:rgba(255,255,255,0.08); --border2:rgba(255,255,255,0.15);
+  --serif:'Instrument Serif',Georgia,serif; --sans:'DM Sans',system-ui,sans-serif; --mono:'DM Mono','SF Mono',monospace;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{height:100%}
+body{background:var(--dark-bg);color:var(--text-dark);font-family:var(--sans);font-weight:300;min-height:100vh;overflow-x:hidden;-webkit-font-smoothing:antialiased}
+body::after{content:'';position:fixed;inset:0;background-image:url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.75' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");opacity:0.04;pointer-events:none;z-index:9999}
+.wrap{max-width:1200px;margin:0 auto;padding:48px 56px 80px;position:relative;z-index:1}
+header{display:flex;align-items:center;justify-content:space-between;gap:32px;padding-bottom:28px;border-bottom:1px solid var(--dark-border);flex-wrap:wrap}
+.brand{display:flex;align-items:center;gap:18px}
+.mark{width:56px;height:56px;border-radius:13px;background:var(--volt);display:flex;align-items:center;justify-content:center;flex-shrink:0;box-shadow:0 4px 24px rgba(0,0,0,.4)}
+.mark span{font-family:var(--serif);font-size:38px;color:var(--grove);line-height:1}
+h1{font-family:var(--serif);font-weight:400;font-size:clamp(34px,4vw,54px);letter-spacing:-.02em;line-height:1}
+h1 em{font-style:italic;color:rgba(240,240,232,.55)}
+.subt{font-family:var(--mono);font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted-dark);margin-top:6px}
+.live-pill{display:inline-flex;align-items:center;gap:8px;font-family:var(--sans);font-weight:700;font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:#3D5A0A;background:rgba(213,239,138,.25);padding:5px 13px;border-radius:100px}
+.live-dot{width:8px;height:8px;border-radius:50%;background:var(--volt);box-shadow:0 0 8px var(--volt);animation:pulse 1.6s ease-in-out infinite}
+@keyframes pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.35;transform:scale(.7)}}
+.counts{display:flex;gap:10px;margin-top:10px;font-family:var(--mono);font-size:12px;flex-wrap:wrap}
+.counts span{padding:4px 12px;border-radius:100px;border:1px solid var(--dark-border);color:var(--muted-dark)}
+.addbar{display:flex;gap:12px;margin:34px 0 14px;flex-wrap:wrap}
+.addbar input{flex:1;min-width:280px;font-family:var(--sans);font-size:20px;color:var(--text-dark);background:var(--surface);border:1.5px solid var(--dark-border);border-radius:14px;padding:16px 20px;outline:none}
+.addbar input:focus{border-color:var(--grove);box-shadow:0 0 0 3px rgba(94,122,94,.25)}
+.btn-volt{font-family:var(--sans);font-weight:700;font-size:17px;color:var(--midnight);background:var(--volt);border:none;border-radius:14px;padding:0 32px;cursor:pointer;white-space:nowrap}
+.btn-volt:hover{filter:brightness(1.06);box-shadow:0 4px 20px var(--volt-glow)}
+ul{list-style:none}
+.task{background:var(--surface);border:1px solid var(--dark-border);border-radius:18px;padding:20px 22px;margin-top:14px}
+.task.fresh{animation:fadeUp .2s ease-out}
+@keyframes fadeUp{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:none}}
+.task.done{opacity:.6}
+.task-top{display:flex;align-items:flex-start;gap:16px}
+.check{width:38px;height:38px;flex-shrink:0;border-radius:11px;cursor:pointer;border:2px solid var(--border2);background:transparent;display:flex;align-items:center;justify-content:center;transition:.2s;color:#fff;font-weight:700}
+.check:hover{border-color:var(--volt)}
+.check.on{background:var(--success);border-color:var(--success)}
+.check.disabled{opacity:.3;cursor:not-allowed}
+.task-main{flex:1;min-width:0}
+.task-text{font-family:var(--serif);font-size:clamp(22px,2.2vw,30px);line-height:1.15;letter-spacing:-.01em;word-break:break-word;cursor:text;outline:none}
+.task-text:focus{box-shadow:0 2px 0 var(--grove)}
+.task.done .task-text{text-decoration:line-through;color:var(--muted-dark)}
+.meta{display:flex;align-items:center;gap:8px;margin-top:8px;flex-wrap:wrap}
+.badge{font-family:var(--mono);font-weight:500;font-size:11px;letter-spacing:.04em;border-radius:100px;padding:3px 10px;text-transform:uppercase}
+.st-needs_brainstorm{background:rgba(196,191,255,.18);color:var(--iris)}
+.st-ready{background:rgba(90,200,250,.16);color:var(--info)}
+.st-dispatched,.st-working{background:rgba(254,188,46,.18);color:var(--warning)}
+.st-blocked{background:rgba(255,59,48,.16);color:var(--danger)}
+.st-awaiting_verify{background:rgba(254,188,46,.14);color:var(--warning)}
+.st-done{background:rgba(52,199,89,.16);color:#52d873}
+.tag{font-family:var(--mono);font-size:11px;color:var(--muted-dark);border:1px solid var(--dark-border);border-radius:100px;padding:3px 10px}
+.row{display:flex;align-items:center;gap:10px;margin-top:12px;flex-wrap:wrap}
+.field{font-family:var(--sans);font-size:14px;color:var(--text-dark);background:var(--surface);border:1px solid var(--dark-border);border-radius:10px;padding:9px 12px;outline:none;flex:1;min-width:220px}
+.field:focus{border-color:var(--grove);box-shadow:0 0 0 2px rgba(94,122,94,.2)}
+.label{font-family:var(--mono);font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted-dark);min-width:120px}
+.label.req::after{content:' *';color:var(--danger)}
+.toggle{display:inline-flex;align-items:center;gap:9px;cursor:pointer;font-family:var(--mono);font-size:12px;color:var(--muted-dark);user-select:none}
+.toggle.disabled{opacity:.4;cursor:not-allowed}
+.sw{width:42px;height:24px;border-radius:100px;background:var(--surface2);border:1px solid var(--border2);position:relative;transition:.2s}
+.sw::after{content:'';position:absolute;top:2px;left:2px;width:18px;height:18px;border-radius:50%;background:var(--muted-dark);transition:.2s}
+.toggle.on .sw{background:var(--volt-dim);border-color:var(--volt)}
+.toggle.on .sw::after{left:21px;background:var(--volt)}
+.brainstorm{margin-top:10px;font-family:var(--sans);font-size:14px;line-height:1.5;color:var(--text-dark);background:rgba(196,191,255,.07);border-left:2px solid var(--iris);border-radius:0 8px 8px 0;padding:10px 14px}
+.brainstorm .h{font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--iris);display:block;margin-bottom:4px}
+.status{margin-top:10px;font-family:var(--mono);font-size:12.5px;color:var(--warning);background:rgba(254,188,46,.08);border-radius:8px;padding:8px 12px}
+.proofs{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;align-items:center}
+.proof-list{display:contents}
+.proof{font-family:var(--mono);font-size:11px;color:var(--text-dark);background:var(--surface2);border:1px solid var(--dark-border);border-radius:8px;padding:6px 10px;max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-decoration:none;display:inline-block}
+.proof.img{padding:3px}
+.proof.img img{max-width:130px;max-height:90px;border-radius:6px;display:block}
+.ctrls{display:flex;gap:6px;flex-shrink:0}
+.ictrl{min-width:34px;height:34px;padding:0 8px;border-radius:9px;cursor:pointer;background:transparent;border:1px solid var(--dark-border);color:var(--muted-dark);font-size:14px;display:flex;align-items:center;justify-content:center}
+.ictrl:hover{border-color:var(--volt);color:var(--volt)}
+.ictrl.del:hover{border-color:var(--danger);color:var(--danger)}
+.empty{text-align:center;padding:70px 20px;font-family:var(--serif);font-style:italic;font-size:28px;color:var(--muted-dark)}
+.ping{font-family:var(--mono);font-size:10px;color:var(--muted-dark)}
+@media(max-width:760px){.wrap{padding:30px 18px 60px}header{flex-direction:column;align-items:flex-start}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <div class="brand">
+        <div class="mark"><span>P</span></div>
+        <div><h1>Priorities <em>— v2</em></h1><div class="subt">Boss source-of-truth · MyPeople</div></div>
+      </div>
+      <div class="counts" id="counts"></div>
+    </div>
+    <div style="text-align:right">
+      <span class="live-pill"><span class="live-dot"></span><span id="conn">live</span></span>
+      <div class="subt" id="clock" style="margin-top:8px">—</div>
+    </div>
+  </header>
+  <div class="addbar">
+    <input id="newItem" type="text" placeholder="Add a priority and hit Enter…" autocomplete="off">
+    <button class="btn-volt" id="addBtn">Add</button>
+  </div>
+  <ul id="list"></ul>
+</div>
+
+<script>
+const SECRET="__QUEUE_SECRET__";
+const listEl=document.getElementById('list'), input=document.getElementById('newItem');
+let board={version:"v2",order:[],tasks:{}};
+const els={};                         // task id -> <li> (with li._r cached child refs)
+
+const H=()=>({'Content-Type':'application/json',...(SECRET?{'X-Queue-Secret':SECRET}:{})});
+async function api(path,body){const r=await fetch(path,{method:'POST',headers:H(),body:JSON.stringify(body)});return r.json();}
+const upd=b=>api('/todo/update',b), statusApi=b=>api('/todo/status',b), brainstormApi=b=>api('/todo/brainstorm',b), proofApi=b=>api('/todo/proof',b);
+const STLABEL={needs_brainstorm:'needs brainstorm',ready:'ready',dispatched:'dispatched',working:'working',blocked:'blocked',awaiting_verify:'awaiting verify',done:'done'};
+function esc(s){return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+
+// ── DIRTY FIELDS ARE SACRED ───────────────────────────────────────────────
+// A field is sacred if it's focused OR has unsaved local edits (data-dirty=1).
+// The poll never overwrites a sacred field; local typing wins until committed.
+function isDirty(el){ return !!el && (el===document.activeElement || el.dataset.dirty==='1'); }
+function watchDirty(el){ el.addEventListener('input',()=>{el.dataset.dirty='1';}); }
+function clearDirty(el){ el.dataset.dirty=''; }
+function setClean(el,val){ if(isDirty(el))return; if(el.value!==val) el.value=val; }              // <input>
+function setCleanText(el,val){ if(isDirty(el))return; if(el.textContent!==val) el.textContent=val; } // contenteditable
+function show(el,on){ el.style.display = on?'':'none'; }
+
+// ── live poll: fetch board, reconcile only the delta. NO page reload. ──────
+async function pull(){
+  try{
+    const r=await fetch('/todo/board',{headers:H()});
+    if(!r.ok){ document.getElementById('conn').textContent=(r.status===403?'auth':'offline'); return; }
+    board=await r.json(); document.getElementById('conn').textContent='live'; reconcile();
+  }catch(e){ document.getElementById('conn').textContent='offline'; }
+}
+
+function reconcile(){
+  const ids=board.order.filter(id=>board.tasks[id]);
+  let done=0; ids.forEach(id=>{if(board.tasks[id].state==='done')done++;});
+  document.getElementById('counts').innerHTML=`<span>${done} done</span><span>${ids.length-done} open</span><span>${ids.length} total</span>`;
+  if(!ids.length){ if(!listEl.querySelector('.empty')) listEl.innerHTML='<li class="empty">Nada ainda. Adiciona a primeira prioridade acima.</li>'; for(const k in els) delete els[k]; return; }
+  const emptyEl=listEl.querySelector('.empty'); if(emptyEl) emptyEl.remove();
+  const sy=window.scrollY, active=document.activeElement;
+  // create + update in place
+  ids.forEach(id=>{ let li=els[id]; if(!li){ li=createTask(id); els[id]=li; listEl.appendChild(li); li.classList.add('fresh'); } syncTask(li, board.tasks[id]); });
+  // remove gone
+  for(const id in els){ if(!ids.includes(id)){ els[id].remove(); delete els[id]; } }
+  // reorder DOM only if the order actually changed
+  const cur=[...listEl.children].map(n=>n.dataset.id).filter(Boolean);
+  if(cur.join(',')!==ids.join(',')) ids.forEach(id=>listEl.appendChild(els[id]));
+  // preserve focus + scroll across the tick
+  if(active && document.contains(active) && document.activeElement!==active){ try{active.focus({preventScroll:true});}catch(e){} }
+  if(window.scrollY!==sy) window.scrollTo(0,sy);
+}
+
+function createTask(id){
+  const li=document.createElement('li'); li.className='task'; li.dataset.id=id;
+  li.innerHTML=`
+    <div class="task-top">
+      <div class="check" title=""></div>
+      <div class="task-main">
+        <div class="task-text" contenteditable="true" spellcheck="false"></div>
+        <div class="meta"><span class="badge"></span><span class="tag asg-tag"></span><span class="badge st-done ver" style="display:none">verified</span><span class="ping"></span></div>
+      </div>
+      <div class="ctrls"><button class="ictrl up">↑</button><button class="ictrl down">↓</button><button class="ictrl del">×</button></div>
+    </div>
+    <div class="row"><span class="label req">done-condition</span><input class="field cond" placeholder="how do we verify this is DONE?"></div>
+    <div class="row"><label class="toggle"><span class="sw"></span>work to done</label><input class="field asg" style="max-width:210px;min-width:150px" placeholder="assignee e.g. main:eng-1"></div>
+    <div class="brainstorm" style="display:none"><span class="h">brainstorm</span><span class="bs-body"></span></div>
+    <div class="status" style="display:none"></div>
+    <div class="proofs"><span class="proof-list"></span>
+      <button class="ictrl addnote">+ note</button><button class="ictrl addimg">+ img</button>
+      <input type="file" accept="image/*" class="imgfile" hidden></div>`;
+  const r={ check:li.querySelector('.check'), text:li.querySelector('.task-text'), badge:li.querySelector('.badge'),
+    asgTag:li.querySelector('.asg-tag'), ver:li.querySelector('.ver'), ping:li.querySelector('.ping'),
+    cond:li.querySelector('.cond'), toggle:li.querySelector('.toggle'), asg:li.querySelector('.asg'),
+    brain:li.querySelector('.brainstorm'), bsBody:li.querySelector('.bs-body'), status:li.querySelector('.status'),
+    proofList:li.querySelector('.proof-list'), addnote:li.querySelector('.addnote'), addimg:li.querySelector('.addimg'),
+    imgfile:li.querySelector('.imgfile'), up:li.querySelector('.up'), down:li.querySelector('.down'), del:li.querySelector('.del'), psig:null };
+  li._r=r;
+  const T=()=>board.tasks[id];
+  // text (contenteditable)
+  watchDirty(r.text);
+  r.text.onblur=()=>{ const v=r.text.textContent.trim(); clearDirty(r.text); const t=T(); if(t&&v&&v!==t.text) upd({op:'set',id,text:v}).then(pull); };
+  r.text.onkeydown=e=>{ if(e.key==='Enter'){e.preventDefault(); r.text.blur();} };
+  // check toggle done/undone
+  r.check.onclick=()=>{ const t=T(); if(!t||!(t.doneCondition||'').trim())return;
+    if(t.state==='done') statusApi({id,state:'ready',verified:false}).then(pull);
+    else if(t.verified) statusApi({id,state:'done'}).then(pull);
+    else alert('Not verified yet — a task is done only when its condition is verified with proof.'); };
+  // done-condition
+  watchDirty(r.cond);
+  r.cond.onblur=()=>{ const t=T(); clearDirty(r.cond); if(t&&r.cond.value!==t.doneCondition) upd({op:'set',id,doneCondition:r.cond.value}).then(pull); };
+  r.cond.onkeydown=e=>{ if(e.key==='Enter') r.cond.blur(); };
+  // work-to-done toggle
+  r.toggle.onclick=()=>{ const t=T(); if(!t||!(t.doneCondition||'').trim())return; upd({op:'set',id,workToDone:!t.workToDone}).then(pull); };
+  // assignee
+  watchDirty(r.asg);
+  r.asg.onblur=()=>{ const t=T(); clearDirty(r.asg); const v=r.asg.value.trim()||null; if(t&&v!==(t.assignee||null)) upd({op:'set',id,assignee:v}).then(pull); };
+  r.asg.onkeydown=e=>{ if(e.key==='Enter') r.asg.blur(); };
+  // reorder / delete
+  r.up.onclick=()=>move(id,-1); r.down.onclick=()=>move(id,1);
+  r.del.onclick=()=>{ if(confirm('Delete this priority?')) upd({op:'del',id}).then(pull); };
+  // proof: note (text/link) + image upload
+  r.addnote.onclick=()=>{ const v=prompt('Proof — paste a link, or text describing what was done:'); if(v&&v.trim()) proofApi({task_id:id,type:/^https?:\/\//.test(v)?'link':'text',ref:v.trim(),by:'CEO'}).then(pull); };
+  r.addimg.onclick=()=>r.imgfile.click();
+  r.imgfile.onchange=()=>{ const f=r.imgfile.files[0]; if(!f)return; const rd=new FileReader();
+    rd.onload=()=>{ const b=String(rd.result).split(',')[1]; const ext=(f.name.split('.').pop()||'png').toLowerCase();
+      proofApi({task_id:id,type:'image',data_b64:b,ext,caption:f.name,by:'CEO'}).then(pull); };
+    rd.readAsDataURL(f); r.imgfile.value=''; };
+  return li;
+}
+
+function proofChip(p){
+  if(p.type==='image') return `<a class="proof img" href="${esc(p.ref)}" target="_blank" title="${esc(p.caption||'image')}"><img src="${esc(p.ref)}" loading="lazy" alt="proof"></a>`;
+  if(p.type==='video') return `<a class="proof" href="${esc(p.ref)}" target="_blank">🎬 ${esc(p.caption||'video')}</a>`;
+  if(p.type==='link')  return `<a class="proof" href="${esc(p.ref)}" target="_blank">🔗 ${esc(p.ref)}</a>`;
+  return `<span class="proof" title="${esc(p.ref)}">📝 ${esc(p.ref)}</span>`;
+}
+
+function syncTask(li,t){
+  const r=li._r;
+  li.classList.toggle('done', t.state==='done');
+  const canToggle=(t.doneCondition||'').trim().length>0;
+  // check
+  r.check.classList.toggle('on', t.state==='done');
+  r.check.classList.toggle('disabled', !canToggle);
+  r.check.textContent = t.state==='done' ? '✓' : '';
+  r.check.title = canToggle ? 'toggle done (needs verify)' : 'add a done-condition first';
+  // text + meta (never clobber if the CEO is editing)
+  setCleanText(r.text, t.text);
+  r.badge.textContent=STLABEL[t.state]||t.state; r.badge.className='badge st-'+t.state;
+  r.asgTag.textContent = t.assignee ? '@'+t.assignee : 'unassigned';
+  show(r.ver, !!t.verified);
+  r.ping.textContent='↑boss '+(t.pingsToBoss||0);
+  // fields
+  setClean(r.cond, t.doneCondition||'');
+  r.toggle.classList.toggle('on', !!t.workToDone);
+  r.toggle.classList.toggle('disabled', !canToggle);
+  setClean(r.asg, t.assignee||'');
+  // brainstorm
+  if((t.brainstorm||'').trim()){ show(r.brain,true); if(r.bsBody.textContent!==t.brainstorm) r.bsBody.textContent=t.brainstorm; } else show(r.brain,false);
+  // status line
+  if(t.lastStatus && t.state!=='done'){ show(r.status,true); const s='⚠ '+t.lastStatus; if(r.status.textContent!==s) r.status.textContent=s; } else show(r.status,false);
+  // proofs — only rebuild when the set actually changed (keeps images from reloading every tick)
+  const sig=(t.proofs||[]).map(p=>p.id).join(',');
+  if(sig!==r.psig){ r.proofList.innerHTML=(t.proofs||[]).map(proofChip).join(''); r.psig=sig; }
+}
+
+function move(id,d){ const o=board.order.filter(x=>board.tasks[x]); const i=o.indexOf(id),j=i+d; if(j<0||j>=o.length)return; [o[i],o[j]]=[o[j],o[i]]; upd({op:'reorder',order:o}).then(pull); }
+
+function add(){ const t=input.value.trim(); if(!t)return; input.value=''; upd({op:'add',text:t}).then(pull); }
+document.getElementById('addBtn').onclick=add;
+input.addEventListener('keydown',e=>{ if(e.key==='Enter') add(); });
+
+function clock(){ const d=new Date(); document.getElementById('clock').textContent=d.toLocaleTimeString(); }
+setInterval(clock,1000); clock();
+setInterval(pull,1000); pull();   // 1s live poll, incremental — no reload, dirty fields preserved
+input.focus();
+</script>
+</body>
+</html>

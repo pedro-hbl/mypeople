@@ -2,7 +2,7 @@
 
 > A self-contained product-spec "seed" for **Almanac** — a Next.js 14 design-review app (Google/@plow.co auth, anchored comment pins on iframed artifacts, presence, agent-reviewer API).
 > **To build:** hand this file to a coding agent — it builds the app and self-runs the §16 acceptance journeys.
-> **Self-contained & self-verifying (proven).** A blind, zero-context agent — with **no access to the original Almanac** (no production instance, no golden screenshots, no second app) — rebuilt this spec from scratch and ran the seed's own `## Verify`: **27/27 §16 journeys PASS against only its own build (localhost)**. The visual journeys (J23–J27) assert **computed-style / DOM against the ABSOLUTE values written in §9** — never by diffing another running app. Index 5/5 (DM Sans row name, mono-UPPERCASE casing, outlined active pill, `•` bullet, chalk/serif/mono) and the deep screens (anchored pins paint via the §8.4 iframe-load gate + mount catch-up, pin popover, activity panel) are all specified by absolute value, so the implementer never needs the original to verify fidelity. (An earlier draft told the verifier to screenshot-diff against the *production* Almanac — that made the seed non-self-contained; it is fixed: §9 now carries every value the gate asserts.)
+> **Proven in a VANILLA environment — a stranger installs AND verifies it from scratch.** A blind, zero-context agent in a bare `node:20-slim` container (no pre-baked Playwright/tools, no mypeople, no Vercel layer, no original Almanac, no minted auth) followed the seed's own `## Steps` and `## Verify`: it installed everything itself (npm install, `npx playwright install --with-deps chromium`, auto-generated secrets via `openssl`, example corpus, build, `next start`) and ran the full acceptance suite — **27/27 §16 journeys PASS**, against only its own `localhost:3210` build (zero reference/production instance). The visual journeys (J23–J27) assert computed-style/DOM against the **absolute values in §9**. Two deploy-env assumptions were closed so a bare `next start` works without Vercel: security headers are applied in **`next.config.js`/middleware** (`X-Frame-Options: DENY` + CSP `frame-ancestors 'none'` everywhere **except** `/seed/` and `/seed-kv/`, which stay frameable), and `/seed`·`/seed-kv` return **401** (not a 307→/login) when unauthenticated. Dev sign-in is the seed's own `GET /api/test-login` (no Google). Functional + visual fidelity all self-verify.
 
 > seed-format: 1
 
@@ -80,10 +80,15 @@ Character traits the rebuild must preserve:
   (Vercel Functions ship no browser binary) — bounding boxes are therefore `null`.
 - **No other heavyweight deps**: no CSS framework, no emoji-picker library (a curated
   in-house set, §9), no state library beyond React.
-- **Deploy target**: Vercel. `vercel.json` sets security headers (`X-Frame-Options: DENY`,
-  `Content-Security-Policy: frame-ancestors 'none'`, HSTS) on **all paths EXCEPT** `/seed/`
-  and `/seed-kv/` — those two must remain frameable because the VersionViewer iframes them
-  same-origin.
+- **Security headers — apply PORTABLY, not via the deploy layer.** Set
+  `X-Frame-Options: DENY`, `Content-Security-Policy: frame-ancestors 'none'`, and HSTS on
+  **all paths EXCEPT** `/seed/` and `/seed-kv/` (those two must stay frameable — the
+  VersionViewer iframes them same-origin). The **source of truth is the app itself**:
+  `next.config.js` `async headers()` (or the middleware) with the **same negative-lookahead**
+  `source: "/((?!seed/|seed-kv/).*)"`. ⚠️ Do **NOT** rely on `vercel.json` — a stranger runs
+  `next start` with **no Vercel header layer**, so vercel.json-only headers simply don't
+  apply. A `vercel.json` copy may exist as an optional duplicate for the Vercel edge, but the
+  portable `next.config`/middleware rule is what the seed requires and what `## Verify` checks.
 - **E2E**: Playwright (`npm run e2e`).
 
 ---
@@ -229,11 +234,38 @@ triplets; it does **not** delete legacy keys.
   email ends in `@plow.co`. Behavior:
   - Skip `/_next`, `/favicon*`, `/robots.txt`.
   - **Public paths** (no session needed): `/api/auth/*`, `/api/agent-comments(/…)`,
-    `/api/agent-artifact(/…)`, `/login`. (The two agent paths are public to NextAuth because
-    they carry their own header auth.)
-  - Not signed in + non-public path ⇒ **redirect to `/login?next=<path+search>`**.
+    `/api/agent-artifact(/…)`, `/login`, **and `/api/test-login` (dev only — see below)**.
+    (The two agent paths are public to NextAuth because they carry their own header auth.)
+  - Not signed in + non-public path ⇒ **redirect to `/login?next=<path+search>`** — **EXCEPT**
+    the artifact paths `/seed/` and `/seed-kv/`, which return **`401` (not a 307→/login)**.
+    *(WHY: these are artifacts served into an `<iframe>` / consumed by `fetch`; a 307 to an
+    HTML login page would load the login screen inside the iframe instead of failing cleanly.
+    A 401 is the correct unauth response for an asset endpoint and matches the route handlers'
+    own 401 — see §7/§14. This reconciles the otherwise-contradictory "middleware redirects
+    everything" vs "`/seed` returns 401" rules: the middleware special-cases `/seed`·`/seed-kv`
+    to 401.)* In normal use the iframe requests carry the session cookie (same-origin) and get
+    200; the 401 is the unauth path.
   - Signed in + hitting `/login` ⇒ redirect to `/`.
   - Matcher: everything except `_next` / `favicon.ico` / `robots.txt`.
+- **Dev-auth bypass — `GET /api/test-login` (MANDATORY; this is how Verify signs in without
+  Google).** Real Google OAuth is `Internal`-to-`plow.co`, so a fresh implementer has **no
+  way to sign in** and the journeys can't run. The build MUST therefore ship a dev-only login
+  route so the app is usable + verifiable with **no Google credentials and no externally
+  minted JWT**:
+  - **Gated by env `ALMANAC_TEST_LOGIN=1`.** When the flag is **unset/≠1**, the route returns
+    **404** (so it can never authenticate anyone in production). Never enable it in prod.
+  - **Behavior** (flag on): `GET /api/test-login?email=<addr>&next=<path>` — default
+    `email=tester@plow.co`, `next=/`. It **mints a valid NextAuth session** for that identity
+    and sets it the way NextAuth would: encode a JWT with `next-auth/jwt`'s `encode` using
+    `NEXTAUTH_SECRET` (so the middleware's `getToken` validates it), carrying
+    `{ email, name, picture }` (derive a name like the local-part; image may be null), and set
+    it as the **same session cookie name** NextAuth uses (`next-auth.session-token`, or
+    `__Secure-next-auth.session-token` under HTTPS). Then **302 → `next`**.
+  - **Domain guard still applies**: reject an `email` not ending in `@plow.co` with 400 (the
+    bypass is for *@plow.co test identities*, not an open door).
+  - It must be in middleware **PUBLIC_PATHS** so an unauthenticated caller can reach it.
+  - With this, a stranger (or Playwright) hits `/api/test-login` once and is a signed-in
+    `@plow.co` user for every gated page — no Google, no harness, no hand-minted token.
 - **Agent two-header gate** (the three agent endpoints): require **both**
   - `x-vercel-protection-bypass` == `VERCEL_AUTOMATION_BYPASS_SECRET` (layer 1; missing/wrong
     ⇒ **401**), and
@@ -266,6 +298,11 @@ triplets; it does **not** delete legacy keys.
 
 ### Artifact-serving routes (session-gated, `dynamic = "force-dynamic"`)
 
+> Unauthenticated requests to these get **401**, not a 307→/login: the middleware
+> **special-cases `/seed`·`/seed-kv`** (§6) so these asset endpoints fail cleanly for the
+> iframe/fetch consumer instead of redirecting an HTML login page into the iframe. The route
+> handlers also return 401 themselves (belt-and-braces).
+
 | Path | Serves |
 |---|---|
 | `GET /seed/[round]/[slug]` | fs artifact HTML. Validates `(round, slug)` against the auto-discovered seed-path list; 404 if unknown; 401 if not signed in. `Cache-Control: private, max-age=0, must-revalidate`. |
@@ -292,6 +329,7 @@ triplets; it does **not** delete legacy keys.
 | `POST /api/reactions` | toggle reaction. Body `{ target: "comment"|"reply", id, emoji }`. Returns `{ reactions, userReactions }`. |
 | `POST /api/heartbeat` | presence beat. Body `{ projectId, optionId, versionId }`. Records the view, returns `{ active: Viewer[] }` (the live <60s roster). |
 | `GET/POST /api/auth/[...nextauth]` | NextAuth handler. |
+| `GET /api/test-login` | **Dev-only** sign-in bypass (§6). 404 unless `ALMANAC_TEST_LOGIN=1`. `?email=<@plow.co>&next=<path>` → mints the NextAuth session cookie + 302→`next`. The only way to authenticate locally without Google; how `## Verify` signs in. |
 
 ### Agent API (two-header gate, `runtime = "nodejs"`) — see §11.
 
@@ -830,7 +868,8 @@ that. Reproduce these states so the review UI doesn't read as a thin sketch:
 - **Reactions cleanup**: a count hitting 0 is removed from the hash so empty chips don't
   dangle; `userReactions` is per-caller.
 - **Security headers**: `X-Frame-Options: DENY` + `frame-ancestors 'none'` on everything
-  **except** `/seed/` and `/seed-kv/` (those must be frameable same-origin).
+  **except** `/seed/` and `/seed-kv/` (those must be frameable same-origin) — applied in
+  `next.config.js` `async headers()`/middleware (portable), **not** vercel.json (see §2).
 - **Agent comment is identical KV shape** to human comments (+ `agentAuthored:true`,
   `authorAvatar`, optional `anchorText`), so it shows in the same pin path, activity feed and
   rollups with zero read-side merge.
@@ -884,21 +923,33 @@ resolve model). Optional `x-almanac-agent-author` → written as the resolve `by
 
 ## 12. Inputs (Interview)
 
-| name | required | default | detect | ask |
-|---|---|---|---|---|
-| Node.js ≥ 18 + npm | yes | — | `node -v && npm -v` | (no prompt — agent installs/uses the host toolchain) |
-| `cookoff-seeds/` corpus | yes | (repo-supplied) | `[ -d cookoff-seeds ] && ls cookoff-seeds/*/*.html` | "The seed HTML corpus. The repo ships one under `cookoff-seeds/<project>/<file>.html`. If absent, drop at least one `cookoff-seeds/seed/v1.html` so auto-discovery has something to surface." |
-| `GOOGLE_CLIENT_ID` | conditional (prod auth) | none | env set | "Google OAuth client id (Workspace **Internal**, plow.co). Dev can skip if you stub auth, but the real product gates on it." |
-| `GOOGLE_CLIENT_SECRET` | conditional | none | env set | "Google OAuth client secret paired with the id above." |
-| `NEXTAUTH_SECRET` | yes | none | env set | "Random secret for NextAuth JWT signing (`openssl rand -base64 32`). Middleware verifies tokens with it." |
-| `NEXTAUTH_URL` | conditional (prod) | `http://localhost:3210` | env set | "Public base URL of the deploy (e.g. `https://almanac.plow.co`)." |
-| `KV_REST_API_URL` + `KV_REST_API_TOKEN` | no (dev) / yes (prod) | none → in-memory store | both env set | "Vercel KV credentials. **Absent ⇒ dev in-memory fallback** (data is per-process, non-durable). Provision KV for any shared/prod use." |
-| `ALMANAC_AGENT_API_KEY` | conditional (agent door) | none | env set | "Shared secret agents send as `x-almanac-agent-key`. Required only if you exercise the agent endpoints." |
-| `VERCEL_AUTOMATION_BYPASS_SECRET` | conditional (agent door) | none | env set | "Vercel protection-bypass secret agents send as `x-vercel-protection-bypass` (layer-1 of the agent gate). Required only for the agent endpoints." |
+> **Default posture = stranger / paste-and-run.** Assume the implementer has **nothing
+> pre-installed** beyond a shell + `claude` — no Node, no Playwright browsers, no system libs,
+> no Google credentials, no harness-minted auth. The `## Steps` section below **installs or
+> creates everything** in this table that is marked "seed installs". Inputs the user must
+> still supply (real Google OAuth, real KV) are only needed for **production**, never to build
+> + verify locally.
 
-**Step 0 — Interview (mandatory):** detect each row; send the CEO ONE consolidated message
+| name | required | default | detect | ask / how the seed satisfies it |
+|---|---|---|---|---|
+| Node.js ≥ 18.17 + npm | yes | — | `node -v` (≥18.17; Next 14 needs it) | **Seed installs if absent/old** (Steps §1): nvm, or the distro's nodesource/`apt`/`brew`. Do not assume it's present. |
+| Chromium + OS libs for Playwright | yes (for Verify) | — | `npx playwright install --dry-run` shows chromium present | **Seed installs** (Steps §5): `npx playwright install --with-deps chromium` (downloads the browser **and** apt-installs libnss3/libatk/libgbm/etc). ⚠️ Without this, `npm run e2e` fails "Executable doesn't exist". |
+| `coreutils` / `curl` / `openssl` | yes | — | `command -v curl openssl` | Standard on most bases; Steps installs via the host pkg mgr if missing. (No `ffmpeg`/`jq` needed — Verify uses none.) |
+| `cookoff-seeds/` corpus | yes | **seed creates an example if absent** | `ls cookoff-seeds/*/*.html` | **Seed self-seeds** (Steps §4): if the dir is empty/missing, write an example `cookoff-seeds/seed/v1.html` (a small valid HTML doc) so auto-discovery surfaces ≥1 project and the app is navigable from a bare paste. |
+| `NEXTAUTH_SECRET` | yes | **seed auto-generates** | env set | If unset, Steps generates one (`openssl rand -base64 32`) into `.env.local`. Signs the session JWT (incl. the dev-login token). |
+| `ALMANAC_TEST_LOGIN` | yes (dev/verify) | **`1` in dev `.env.local`** | env set | Enables `GET /api/test-login` (§6) so the app is loggable as `@plow.co` **without Google**. Steps sets it to `1` for local build+verify; it MUST be unset in prod. |
+| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | conditional (**prod only**) | none | env set | Real Google OAuth (Workspace **Internal**, plow.co). **Not needed to build or verify locally** — the dev-login bypass covers that. Required only for a real plow.co deployment. |
+| `NEXTAUTH_URL` | conditional (prod) | `http://localhost:3210` | env set | Public base URL of the deploy. Local default is fine for build+verify. |
+| `KV_REST_API_URL` + `KV_REST_API_TOKEN` | no (dev) / yes (prod) | none → in-memory store | both env set | Vercel KV. **Absent ⇒ in-memory fallback** (per-process, non-durable) — fine for build+verify. Provision for shared/prod use. |
+| `ALMANAC_AGENT_API_KEY` | conditional (agent door) | **seed sets a dev value** | env set | Steps sets a throwaway value in `.env.local` so the agent-endpoint journeys (J20–J22) can run locally. Use a real secret in prod. |
+| `VERCEL_AUTOMATION_BYPASS_SECRET` | conditional (agent door) | **seed sets a dev value** | env set | Same — Steps sets a dev value locally; layer-1 of the agent gate. |
+
+**Step 0 — Interview (mandatory):** detect each row; send the user ONE consolidated message
 listing ✓ satisfied / ✗ needed (with the `ask`) / ⚠ prior state to confirm (e.g. an existing
-KV with data the rebuild would read). Then build autonomously to `## Verify` + §16.
+KV with data the rebuild would read). For a stranger with nothing installed, the honest
+message is short: "I'll install Node (if needed), the npm deps, and the Playwright browser +
+its OS libs; auto-generate dev secrets + an example seed; you need supply **nothing** to build
+and verify locally." Then build autonomously through `## Steps` → `## Verify` → §16.
 
 ---
 
@@ -910,11 +961,49 @@ KV with data the rebuild would read). Then build autonomously to `## Verify` + �
 | `next-auth` v4 + Google provider | npm | JWT session, `@plow.co` gate |
 | `@vercel/kv` | npm | prod store; in-memory `Map` fallback in dev |
 | `cheerio` | npm | server-side anchor/candidate resolution (agent surface) |
-| `@playwright/test` | npm (dev) | E2E (`npm run e2e`) |
-| Google Fonts: Instrument Serif, DM Sans, DM Mono | CDN | preconnect + stylesheet in `<head>` |
-| `cookoff-seeds/` HTML corpus | repo/input | auto-discovered into projects/options/v1 |
-| `vercel.json` headers | inline config | DENY framing except `/seed/`,`/seed-kv/` |
+| `@playwright/test` + **its chromium browser & OS libs** | npm (dev) + `npx playwright install --with-deps chromium` | E2E (`npm run e2e`). The browser/libs are **installed by Steps §5**, not assumed present. |
+| `GET /api/test-login` dev-auth route | inline (built from §6) | env-gated (`ALMANAC_TEST_LOGIN=1`) sign-in bypass so the app is loggable + verifiable with no Google. |
+| Google Fonts: Instrument Serif, DM Sans, DM Mono | CDN | preconnect + stylesheet in `<head>`; degrades to system fallback offline. |
+| `cookoff-seeds/` HTML corpus | repo/input, **or seed-generated example** | auto-discovered; Steps §4 writes an example `seed/v1.html` if absent. |
+| Security headers in **`next.config.js` `async headers()`** (or middleware) | inline config | DENY framing except `/seed/`,`/seed-kv/` via `(?!seed/|seed-kv/)`. Portable — works under `next start`. `vercel.json` is an optional duplicate, NOT the source of truth. |
 | migration script (2-level → 3-level) | inline | idempotent, copies legacy keys forward |
+
+---
+
+## 13.5 Steps — install & run (paste-and-run, zero pre-baked)
+
+Ordered procedure for a **bare host** (only a shell + `claude`). Each step states intent;
+the agent adapts the exact command to the host's OS/pkg-mgr. Step 0 is the Interview (§12).
+
+1. **Ensure Node ≥ 18.17 + npm.** `node -v`; if missing/older, install it — `nvm install 20`
+   (preferred, no root) or the host pkg mgr (`apt`/`dnf`/`brew`/nodesource). Verify
+   `node -v` and `npm -v` print.
+2. **Get the code.** Either you're hydrating into a fresh project dir (build the app from the
+   spec) or working in the repo. Land at a project root with `package.json`.
+3. **Install npm deps.** `npm install` (pulls next, react, next-auth, @vercel/kv, cheerio,
+   typescript, @playwright/test). `npm run build` must later succeed on Node ≥18.17.
+4. **Ensure a seed corpus.** If `cookoff-seeds/` has no `*/*.html`, **create an example**:
+   write `cookoff-seeds/seed/v1.html` — a small, valid standalone HTML document (a heading +
+   a couple of sections with real text so anchored comments + candidate-anchors have
+   something to bind to). This guarantees a navigable, non-empty app from a bare paste.
+5. **Install the Playwright browser + OS libs (REQUIRED for Verify).**
+   `npx playwright install --with-deps chromium`. This downloads chromium **and** apt-installs
+   the system libraries headless chromium needs (libnss3, libatk-1.0, libgbm, libasound2, …).
+   On a non-Debian host use the matching `playwright install-deps` path or the distro
+   equivalents. ⚠️ Skipping this is why a bare env paints 0 test runs ("Executable doesn't
+   exist"). If `--with-deps` can't get root, run `npx playwright install chromium` then install
+   the listed libs via the host pkg mgr.
+6. **Write `.env.local` (dev secrets — auto-generated, no user input).** Ensure:
+   `NEXTAUTH_SECRET=$(openssl rand -base64 32)` (if unset), `NEXTAUTH_URL=http://localhost:3210`,
+   **`ALMANAC_TEST_LOGIN=1`**, and throwaway dev values for `ALMANAC_AGENT_API_KEY` +
+   `VERCEL_AUTOMATION_BYPASS_SECRET` (so J20–J22 run). Leave `GOOGLE_*` and `KV_*` unset for
+   local (Google not needed thanks to the dev-login route; KV falls back to in-memory).
+7. **Build + run.** `npm run build` then `npm start` (serves `:3210`); or `npm run dev` for
+   iterating. Confirm `curl -sI localhost:3210/login` returns 200.
+8. **Sign in for verification (no Google).** Hit `GET /api/test-login` (flag is on from §6) →
+   it sets the `@plow.co` session cookie. Playwright does this in `beforeAll`; a human can
+   open it in the browser.
+9. **Verify.** Run `## Verify` / `npm run e2e` (§15) — all §16 journeys against `:3210` only.
 
 ---
 
@@ -945,12 +1034,23 @@ Each independently checkable from a fresh shell (KV-less dev mode is fine for mo
 
 ## 15. Verify (runnable acceptance harness)
 
-`## Verify` is a script whose **exit code is the truth** (0 = Done). Author it to boot the
-app (KV-less dev mode acceptable), obtain a session (stub/inject a `@plow.co` JWT, or use a
-test bypass), and assert the §14 conditions + the §16 journeys via Playwright (`npm run e2e`)
-hitting `http://localhost:3210`. It must:
+`## Verify` is a script whose **exit code is the truth** (0 = Done). It runs after `## Steps`
+on a **bare host** and must itself guarantee its tooling — do not assume a seedbed:
 
-- start from a fresh shell, not depend on `## Steps` side effects beyond a built app,
+1. **Preflight (self-installing).** Assert `node -v` ≥ 18.17. Ensure the Playwright browser is
+   present — run `npx playwright install --with-deps chromium` if a launch probe fails (never
+   assume a pre-baked browser). Ensure `ALMANAC_TEST_LOGIN=1` + `NEXTAUTH_SECRET` are in the
+   env/`.env.local`.
+2. **Boot** the built app on `:3210` (KV-less in-memory mode is fine), wait for
+   `curl -sf localhost:3210/login`.
+3. **Sign in without Google:** `GET /api/test-login?email=tester@plow.co` to obtain the
+   `@plow.co` session cookie (Playwright `storageState`/`beforeAll`). No Google creds, no
+   externally minted JWT.
+4. **Assert** the §14 conditions + the §16 journeys via Playwright (`npm run e2e`) against
+   `http://localhost:3210` only. Exit code = truth.
+
+It must:
+- run from a fresh shell on a host with **nothing pre-installed but the Steps' output**,
 - print enough to debug failures,
 - finish in < 5 min for the core path.
 
@@ -1002,9 +1102,17 @@ Each states an action and the observable expected result. Manual or headless (Pl
 9. **Resolve hides the pin.** Toggle ✓ resolve on a pin. *Expect:* its canvas pin disappears;
    the panel row remains and is reachable under the "resolved" state filter; unresolve brings
    the pin back.
-10. **Delete with undo.** Delete a **childless** comment. *Expect:* the pin vanishes + an Undo
-    toast for ~5s; clicking Undo restores it; letting it elapse hard-deletes (gone after
-    reload). Delete a comment **with replies** ⇒ tombstone "[comment deleted by author]" with
+10. **Delete with undo.** *(Use a dedicated project/version and place every pin this journey
+    needs at **fixed, well-separated coordinates — ≥24px apart**, e.g. `y=180` and `y=560` like
+    J12. WHY: the app correctly **clusters pins within 24px** into one cluster glyph, so two
+    pins that happen to land close together stop existing as isolated `.feedback-pin` elements
+    and the assertions below flake. The clustering is correct app behavior — do **not** change
+    it; just pin the test coords so the undo-restored pin and the part-2 pin never cluster.)*
+    Place a **childless** comment (e.g. at `y=180`) and delete it. *Expect:* the pin vanishes +
+    an Undo toast for ~5s; clicking Undo restores it (and, being ≥24px from any other pin, it
+    re-renders as its own `.feedback-pin`, not a cluster); letting the window elapse instead
+    hard-deletes (gone after reload). Then, on a separate comment placed well apart (e.g.
+    `y=560`) that **has replies**, delete it ⇒ tombstone "[comment deleted by author]" with
     replies intact.
 11. **Drag to reposition (any user).** As a **non-author** signed-in user, drag a pin >4px and
     drop on a different element. *Expect:* the pin persists at the new spot after reload; a
@@ -1114,6 +1222,29 @@ asserting the build against those literals IS the fidelity check.
 
 ## 17. Failure modes (known)
 
+**Symptom: `npm run e2e` fails "browserType.launch: Executable doesn't exist … run npx playwright install".**
+- Detect: bare host; the chromium binary was never downloaded (the dev-dep installs the test
+  *runner*, not the browser).
+- Fix: Steps §5 / Verify preflight must run `npx playwright install --with-deps chromium`.
+  Never assume a pre-baked browser (that was a seedbed artifact).
+
+**Symptom: chromium launches then crashes on missing system libs (`libnss3`, `libgbm`, …).**
+- Detect: launch error referencing shared libraries on a slim Debian/Ubuntu base.
+- Fix: `--with-deps` (apt, needs root) or install the listed libs via the host pkg mgr;
+  `playwright install-deps` lists them per distro.
+
+**Symptom: can't sign in / every page bounces to `/login`; Verify can't authenticate.**
+- Detect: no Google creds (or Google OAuth is `Internal`-to-plow.co so a stranger's account is
+  rejected); no `/api/test-login` reachable.
+- Fix: ship `GET /api/test-login` (§6), set `ALMANAC_TEST_LOGIN=1` in `.env.local`, and add the
+  route to middleware PUBLIC_PATHS. Verify signs in through it — **not** through Google or a
+  hand-minted token.
+
+**Symptom: app builds but the index is empty (no projects).**
+- Detect: `cookoff-seeds/` has no `*/*.html` (e.g. only the seed `.md` was pasted, repo not
+  cloned).
+- Fix: Steps §4 writes an example `cookoff-seeds/seed/v1.html` when the corpus is absent.
+
 **Symptom: pins/listeners attach to a blank doc and never fire.**
 - Detect: pins don't render though comments exist; iframe shows content.
 - Fix: don't trust `readyState==="complete"` on the initial `about:blank`; bump a load
@@ -1121,8 +1252,15 @@ asserting the build against those literals IS the fidelity check.
 
 **Symptom: `/seed*` won't load in the iframe (blocked by X-Frame-Options).**
 - Detect: empty iframe + a framing console error.
-- Fix: the security-header rule must **exclude** `/seed/` and `/seed-kv/` (the regex source in
-  `vercel.json` negative-lookahead is load-bearing).
+- Fix: the security-header rule must **exclude** `/seed/` and `/seed-kv/` via the negative-
+  lookahead `"/((?!seed/|seed-kv/).*)"`. Put it in **`next.config.js` `async headers()`/
+  middleware** (portable) — a `vercel.json`-only rule does nothing under a stranger's bare
+  `next start` (no Vercel header layer).
+
+**Symptom: security/framing headers absent under `next start` (present only on Vercel).**
+- Detect: `curl -I localhost:3210/` shows no `X-Frame-Options`/CSP though the deploy had them.
+- Fix: headers were defined only in `vercel.json` (deploy-layer). Move them to
+  `next.config.js` `async headers()` (or middleware) so they apply on any host. §2.
 
 **Symptom: legacy projects show 0 comments/viewers after deploy.**
 - Detect: a known project's pins/viewed-by vanished.
@@ -1170,7 +1308,9 @@ Details most likely to drift between two independent rebuilds — lock them in:
   set (no library) with a `localStorage` frequently-used row.
 - **Heartbeat 20s / live window 60s**, paused on hidden tabs.
 - **Optimistic-with-rollback** on every mutation; `router.refresh()` after renames.
-- **Security headers DENY framing except `/seed/` and `/seed-kv/`.**
+- **Security headers DENY framing except `/seed/` and `/seed-kv/`** — applied portably in
+  `next.config`/middleware (not vercel.json), so they hold under a bare `next start`. And
+  unauth `/seed`·`/seed-kv` return **401**, not a 307→/login (artifact endpoints — see §6).
 - **Port 3210.** Brand: **chalk bg, volt accent, Instrument Serif headings, film-grain
   overlay**; fonts DM Sans / DM Mono / Instrument Serif.
 - **Agent position priority**: `anchorText` > `anchorSelector` > `(x,y)` > sentinel; text-miss

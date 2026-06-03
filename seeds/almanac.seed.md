@@ -2,7 +2,7 @@
 
 > A self-contained product-spec "seed" for **Almanac** — a Next.js 14 design-review app (Google/@plow.co auth, anchored comment pins on iframed artifacts, presence, agent-reviewer API).
 > **To build:** hand this file to a coding agent — it builds the app and self-runs the §16 acceptance journeys.
-> **Hardened against the PRODUCTION Almanac (real gate, not self-baseline).** A blind, zero-context agent rebuilt this spec from scratch; the result was compared **against the live production app** (not self-generated baselines) by computed-style + side-by-side screenshot, and **matched it on every divergent visual dimension** that earlier slipped through: project-row name = DM Sans (not serif), mono-UPPERCASE label casing (`ALMANAC` / `+ NEW PROJECT`) with `sign out` lowercase, the leading `•` row bullet, and the **outlined** active filter pill (`#fff` bg + 1px midnight border + 999px radius + status dot), atop the matching chalk bg / Instrument Serif hero / DM Mono labels. Functional journeys (§16, 1–22) pass; the visual journeys (23–27) are gated against **production** baselines. (A prior "v2 / 27/27 one-shot" claim was a false pass — its visual tier was self-referential; that gate has been fixed.)
+> **Hardened against the PRODUCTION Almanac (real gate, not self-baseline) — index AND deep screens.** A blind, zero-context agent rebuilt this spec from scratch and was compared against the live production app (not self-generated baselines) by computed-style + side-by-side screenshot, with identical seeded data (a project · 2 versions · 3 anchored pins · reply · reaction · resolved). **Index: 5/5** — project-row name = DM Sans (not serif), mono-UPPERCASE casing (`ALMANAC` / `+ NEW PROJECT`) with `sign out` lowercase, leading `•` bullet, the outlined active filter pill (`#fff` + 1px midnight border + 999px radius + dot), chalk bg / Instrument Serif hero / DM Mono. **Deep screens:** the **anchored comment pins paint** on the iframed artifact at the exact stored `(x,y)` (the §8.4 iframe-load gate — load counter + mount catch-up for the load-before-hydration race — was the make-or-break detail; without it `loadCount` stays 0 and 0 pins ever paint), the **pin popover** opens with comment + reaction + reply, and the **activity panel** lists the thread. Functional journeys (§16, 1–22) pass; visual journeys (23–27) gate against **production** baselines.
 
 > seed-format: 1
 
@@ -358,15 +358,89 @@ events, display names, and the version-switcher entries.
 allow-scripts"`, **fluid** (width/height 100%) so the seed's own media queries fire against
 its real rendered viewport (no CSS transform / no fixed 1280px inner width).
 
-**Pin layer** (injected into the iframe document, plain DOM — not React):
-- A `<style id="feedback-pin-style">` injected on each real iframe `load` (ignore the
-  transient `about:blank`; bump a load counter so dependent effects re-bind to the live doc).
+**Pin layer** (injected into the iframe document, plain DOM — not React). The pins are an
+**overlay drawn into the seed's iframe document**: absolutely-positioned numbered markers,
+one per non-resolved comment, placed at the comment's `(x,y)`. This overlay is **the single
+most important behavior of the viewer** and the easiest to get wrong — read the iframe-load
+requirement first.
+
+> 🔴 **LOAD-BEARING REQUIREMENT — the iframe-load gate (get this right or pins never paint).**
+> An `<iframe>` first holds a transient **`about:blank`** document that often reports
+> `readyState === "complete"` *before* the real seed HTML loads. If you draw the pin overlay
+> (and attach click/drag/cluster listeners) against that blank document, your effect runs
+> once on the empty doc and the real artifact later **replaces** it — so the pins attach to a
+> dead document and **0 pins ever appear**, even though the data is present and the artifact
+> serves fine. This is the #1 observed deep-screen divergence: the panel lists the comments
+> but the canvas shows no pins. Implement it exactly so:
+> 1. **Do NOT trust `readyState === "complete"`** on the iframe's initial document. Treat
+>    `about:blank` as "not loaded yet."
+> 2. Keep a **load counter** in React state. On the iframe's **`load`** event, check
+>    `iframe.contentDocument.location.href` — **only when it is NOT `about:blank`**
+>    (i.e. the real seed document is in) **increment the counter** (and inject the pin
+>    `<style id="feedback-pin-style">` then).
+> 2.5. **MOUNT CATCH-UP — do not rely on the `load` event alone (this is the exact bug that
+>    painted 0 pins).** When `<iframe src={artifactUrl}>` is **server-rendered**, the browser
+>    starts fetching immediately and — for a fast same-origin document — the **`load` event
+>    can fire BEFORE React hydration attaches your `onLoad` handler**, so `onLoad` never runs,
+>    the counter stays `0`, and a pin effect guarded by `if (loadCount === 0) return` always
+>    early-returns → **0 pins**. (This is *not* the `about:blank` case — the document is fully
+>    loaded; the event was simply missed.) So in an **empty-dep `useEffect(() => {…}, [])` on
+>    mount**, check: if `iframe.contentDocument` already exists **and**
+>    `contentDocument.readyState !== "loading"` **and** `location.href !== "about:blank"`,
+>    **increment the counter immediately** (and inject the style). Keep this **alongside** the
+>    `onLoad` handler from step 2 — `onLoad` still covers version switches / post-mount
+>    re-loads; the catch-up covers the already-loaded-before-hydration case. *(Equivalent
+>    alternative: render the iframe with **no `src`** on the server and assign
+>    `iframe.src = artifactUrl` inside a client-side mount `useEffect`, so `load` always fires
+>    after `onLoad` is attached. The catch-up approach above is preferred.)*
+> 3. **Key the pin-render effect, the click/Alt-click placement listener, the drag handlers,
+>    and the clustering effect on that load counter** (put it in the `useEffect`
+>    dependency array). They must **re-run on every real (re)load of the artifact and on
+>    every version switch**, re-binding to the live `contentDocument` each time. A boolean
+>    "loaded" flag is not enough — a counter guarantees re-fire when the document is replaced.
+>
+> §17 documents this as a failure mode; **this block is the normative requirement** — a
+> blind build must paint pins on the first attempt from §8.4 alone.
+
+**How the overlay is painted (mechanism — same-origin direct DOM, NOT postMessage).** This
+is the central feature (pin-anchored commenting); specify it exactly so a blind build paints
+the stored pins on first load:
+
+- **Same-origin, direct DOM — do NOT use `postMessage`.** The artifact is served from the
+  app's own origin (`/seed` · `/seed-kv`) and the iframe is
+  `sandbox="allow-same-origin allow-scripts"`, so the parent React component **reads and
+  writes `iframe.contentDocument` directly**. The seed HTML is an arbitrary static document
+  with **no message listener** — a `postMessage` handshake would get no reply and paint
+  nothing. Reach into `contentDocument`, don't message it.
+- **The pins live INSIDE the iframe document, not in the parent DOM.** On the real load
+  (per the gate above): (1) inject a `<style id="feedback-pin-style">` into the iframe's
+  **`<head>`** (the pin CSS must exist in the document the pins live in); (2) ensure a single
+  container `<div id="feedback-pin-layer">` appended to the iframe **`<body>`**.
+- **Paint = clear + recreate (idempotent), keyed on the load counter AND `comments`.** On
+  each run: `layer.innerHTML = ""`, then for **every non-resolved comment** create a
+  `doc.createElement("button")` with class `feedback-pin`, set `dataset.id` = comment id and
+  `dataset.pinNumber` = its chronological index (1..N), set `style.left = "<x>px"` /
+  `style.top = "<y>px"`, set `innerHTML` to the avatar/initials glyph, and append it to the
+  layer. (Cluster glyphs for ≤24px-overlapping pins are appended the same way.)
+- **Coordinate space = iframe-document pixels.** A comment's stored `(x,y)` are pixels **in
+  the seed document's own layout** (the iframe is true-fluid — no CSS scale transform), so the
+  pin uses the **raw stored `x`/`y`** with no scale factor. (Placement captures `e.pageX/
+  e.pageY` from a click **inside the iframe document**; a drag writes `mouseEvent.pageX/pageY`
+  back; `(x,y)` are clamped server-side to `x∈[0,4000]`, `y∈[0,30000]`.)
+- **Source of the pins** = the server-provided current-version thread (`readVersionThread`,
+  passed in as `initialComments`). The effect paints **all** of them (minus resolved) — so on
+  a fresh page load with N existing pins in the store, N numbered markers appear over the
+  artifact. The activity panel listing comments while the canvas shows zero pins is the exact
+  symptom of skipping this paint (or keying it on `about:blank`).
+
+The overlay itself:
 - Each non-resolved comment → a **24px circular pin**, volt (`#d5ef8a`) fill, midnight
-  (`#01000a`) 1.5px border, DM-Mono, centered on `(x,y)` via `translate(-50%,-50%)`,
-  `z-index` very high. The glyph is the author's **Google avatar image** (round, cover) or
-  **deterministic-color initials** fallback. `data-pin-number` = chronological index (1..N).
+  (`#01000a`) 1.5px border, DM-Mono, **absolutely positioned**, centered on the comment's
+  `(x,y)` (iframe-document px) via `translate(-50%,-50%)`, `z-index` very high. The glyph is
+  the author's **Google avatar image** (round, cover) or **deterministic-color initials**
+  fallback. `data-pin-number` = chronological index (1..N), shown/derivable for the panel.
 - **Resolved** comments **hide their pin** from the canvas (the row stays in the panel under
-  the "resolved" filter); unresolve re-renders it.
+  the "resolved" filter); unresolve re-renders it (the effect re-runs when `comments` change).
 - **Hover** opens the pin popover (with a ~350ms close grace); **click** opens it (a real
   drag suppresses the click).
 - **Drag to reposition** (any signed-in user): `data-draggable="1"`, `cursor:grab`; drag
@@ -377,7 +451,8 @@ its real rendered viewport (no CSS transform / no fixed 1280px inner width).
 - **Clustering**: pins whose centers fall within **24px** of each other collapse into one
   **cluster glyph** (30px midnight square, top author's avatar + a `+N` count badge). Clicking
   a cluster opens a floating **pop-list** (rendered in the parent document) of its member
-  pins; picking one opens that pin's popover.
+  pins; picking one opens that pin's popover. (The cluster effect is also keyed on the load
+  counter — see the requirement above.)
 
 **Placement modes**:
 - **"+ Comment" toggle** = **sticky** placement (drop many pins; stays armed after each

@@ -2,8 +2,7 @@
 
 > A self-contained product-spec "seed" for **Almanac** — a Next.js 14 design-review app (Google/@plow.co auth, anchored comment pins on iframed artifacts, presence, agent-reviewer API).
 > **To build:** hand this file to a coding agent — it builds the app and self-runs the §16 acceptance journeys.
-> **Hardened (v2):** a blind, zero-context agent reproduced it **one-shot — 27/27 §16 journeys PASS** (22 functional + 5
-> visual-fidelity), real headless-browser Playwright, with the §9 design system reproduced from the spec (computed-style + screenshot gates).
+> **Hardened against the PRODUCTION Almanac (real gate, not self-baseline).** A blind, zero-context agent rebuilt this spec from scratch; the result was compared **against the live production app** (not self-generated baselines) by computed-style + side-by-side screenshot, and **matched it on every divergent visual dimension** that earlier slipped through: project-row name = DM Sans (not serif), mono-UPPERCASE label casing (`ALMANAC` / `+ NEW PROJECT`) with `sign out` lowercase, the leading `•` row bullet, and the **outlined** active filter pill (`#fff` bg + 1px midnight border + 999px radius + status dot), atop the matching chalk bg / Instrument Serif hero / DM Mono labels. Functional journeys (§16, 1–22) pass; the visual journeys (23–27) are gated against **production** baselines. (A prior "v2 / 27/27 one-shot" claim was a false pass — its visual tier was self-referential; that gate has been fixed.)
 
 > seed-format: 1
 
@@ -317,11 +316,15 @@ regex: **`/^[a-z0-9][a-z0-9-]*$/`**, max 64. HTML upload cap: **3,670,016 bytes 
 
 - Hero `projects`. A **status-filter pill nav** (`active` | `archived` | `shipped`), default
   `active`; non-active statuses link to `/?status=<s>`. A **"+ new project"** button opening
-  the New Project modal.
-- Project rows (filtered by **live** status resolved from KV): inline-renamable name (pencil
-  trigger), `<N> options · <M> pins`, "open →", and "updated <relative-time>" (latest version
-  mtime across all option/version leaves; "no source on disk" when 0). Empty filter ⇒
-  "no projects in this status. switch the filter."
+  the New Project modal. *(Casing, per the real: mono labels render **uppercase** — the brand
+  suffix is `ALMANAC`, the button reads `+ NEW PROJECT`, pills `ACTIVE`/`ARCHIVED`/`SHIPPED`;
+  the active pill is **outlined with a status dot**, not solid-filled.)*
+- Project rows (filtered by **live** status resolved from KV): a **leading `•` bullet**, then
+  the inline-renamable **sans** name (pencil trigger; §9.2 — *not* serif), then — **right-aligned
+  on the same row** — `<N> options · <M> pins`, "open →"; and "updated <relative-time>" on a
+  second line (latest version mtime across all option/version leaves; "no source on disk" when
+  0). Rows are separated by hairlines and sit on a tight rhythm (compact, not airy). Empty
+  filter ⇒ "no projects in this status. switch the filter."
 
 ### 8.3 Project page `/p/[projectId]`
 
@@ -485,16 +488,43 @@ family=DM+Mono:wght@400;500;600
 &display=swap
 ```
 
-- **`--serif`** = `'Instrument Serif', Georgia, serif` — **used italic** for all display
-  headings + wordmarks (brand, hero `h1`, page titles, footer wordmark). Headings are
-  weight **400** (the face is light by design — do **not** bold it).
+- **`--serif`** = `'Instrument Serif', Georgia, serif`, weight **400**, **italic**. Its use
+  is **deliberately narrow — ONLY these five surfaces**: the index hero `h1` ("projects"),
+  the project-head `h1`, the auth wordmark, the top-bar brand wordmark ("plow"), and the
+  footer wordmark. Do **not** bold it (the face is light by design).
+  > ⚠️ **OBSERVED DIVERGENCE #1 — do not repeat.** A prior rebuild applied serif italic to
+  > **project / option / version row names**. That is **wrong**. Row/list/card item **names
+  > are `--sans`** (see below), NOT serif. "Display heading" means the big page titles in
+  > the five surfaces above and nothing else. If a name sits inside a list row, a card, a
+  > breadcrumb, or a switcher, it is **sans**.
 - **`--sans`** = `'DM Sans', system-ui, -apple-system, sans-serif` — body, buttons,
-  comment text, breadcrumbs. Base body = **15px / line-height 1.55**, weight 400; emphasis
-  weight 500; strongest 600–700.
+  comment text, breadcrumbs, **and every list/card item name** (project rows, option cards,
+  version names). Base body = **15px / line-height 1.55**, weight 400; **item names = DM Sans
+  500, ~22px, style `normal` (never italic)**; strongest 600–700.
 - **`--mono`** = `'DM Mono', 'SF Mono', Consolas, monospace` — all meta/labels/counts:
   pins, version-bar hint, breadcrumb separators, status pills, eyebrows, `.kbd`, footer,
-  viewer counts. Mono labels are typically **uppercase** with **letter-spacing 0.04–0.12em**.
+  viewer counts.
 - Degrade gracefully to the system fallbacks offline.
+
+**Label casing (OBSERVED DIVERGENCE #2 — pin it).** `text-transform: uppercase` (with
+**letter-spacing 0.04–0.12em**) is applied to a **specific set of chrome labels — NOT to
+every mono element.** Uppercase exactly these (markup may be lowercase; rendered = caps):
+the brand suffix **`ALMANAC`** (next to the serif "plow"), the status filter pills
+**`ACTIVE` / `ARCHIVED` / `SHIPPED`**, the **`+ NEW PROJECT`** CTA, eyebrows
+("← ALL PROJECTS"), the footer line, `.kbd`, the project-status chip, and the
+micro/gate-micro lines. A prior rebuild left these lowercase — reproduce them **uppercased**.
+- **Do NOT uppercase (mono, but lowercase / as-authored):** the **`sign out`** link in the
+  top bar (plain mono, lowercase — ⚠️ a rebuild uppercased it to "SIGN OUT"; it must stay
+  lowercase), the version-bar **hint** ("hold ⌥ to comment"), row **meta/counts**
+  ("2 options · 0 pins"), relative **timestamps** ("updated 7d ago"), and viewer counts.
+  These are mono UI text, not chrome labels — leave their casing alone. Rule of thumb:
+  uppercase the **named chrome labels above**; everything else mono renders as written.
+- **Do NOT uppercase (other):** serif wordmarks ("plow", "projects") render as-authored;
+  and **proper names** — the signed-in user's name in the top-bar identity pill renders
+  **Title-case** ("Daniel", in an oat-filled `999px` pill with a hairline border,
+  `padding 4px 10px`), **not** "DANIEL" and not "daniel". Comment author names, viewer
+  names, and project/option titles are shown as stored (the project *name* is sans, see
+  above), not force-cased.
 
 **Type scale (exact sizes / weights / tracking):**
 
@@ -505,7 +535,7 @@ family=DM+Mono:wght@400;500;600
 | Auth wordmark | serif italic | **38px** · 400 · lh 1 |
 | Brand wordmark (top bar) | serif italic | **22px** · 400 |
 | Footer wordmark | serif italic | **18px** |
-| Project-row / version-card name | sans | **22px** · 500 · `-0.005em` |
+| Project-row / option-card / version name | **sans (DM Sans), style normal — NOT serif/italic** | **22px** · 500 · `-0.005em` |
 | Body / comment text | sans | **15px** (comments ~14px) · 400 · lh 1.55 |
 | Breadcrumb | sans | **14px**; parents 400 muted, current 500 midnight |
 | Meta / counts | mono | **12px** · `0.02em` |
@@ -546,7 +576,8 @@ family=DM+Mono:wght@400;500;600
 | Version/option card | border→midnight + **`translateY(-2px)`** + shadow deepens | — |
 | Card "open →" | color→midnight + `translateX(3px)` | — |
 | Inline-rename **pencil** | **revealed only on row/card hover** (hidden at rest) | — |
-| Status pill / status chip | text or border → midnight | disabled select `opacity 0.55`, cursor progress |
+| Status filter pill | inactive text → midnight on hover | See the **concrete spec** below the table (⚠️ DIVERGENCE #4) — base pill shape + inactive vs active values must all be pinned, not just the active colors. |
+| Status chip (project-head) / select | border → midnight | disabled select `opacity 0.55`, cursor progress |
 | Small icon buttons (react ☺+, ✓ resolve, ⋯) | bg/oat tint | resolve `[data-active]` = volt/midnight |
 | Text input / textarea | — | `:focus` border→midnight; some inputs add a **volt focus-ring** `0 0 0 3px rgba(213,239,138,0.45)` |
 | Identity "who" / sign-out, footnotes | muted→midnight | — |
@@ -554,6 +585,29 @@ family=DM+Mono:wght@400;500;600
 Rule of thumb to converge: **interactive = lifts (`translateY(-1px..-2px)`), tints (oat or
 volt-wash), or reveals (pencil/arrow), on a 180ms ease-out.** Directional affordances
 ("open →", "← back") **translate** toward their direction on hover.
+
+**Status filter pills — concrete values (⚠️ DIVERGENCE #4, pin all three layers).** The
+failure mode here is pinning only the *active colors* and losing the **pill shape**. Specify
+the **base** so the rounded outline survives in every state:
+
+- **Base `.status-pill` (ALL states)** — `display:inline-flex; align-items:center; gap:8px`,
+  **`border-radius: 999px`**, padding **`7px 14px`** (left a touch tighter for the dot, ~11px),
+  **`border: 1px solid transparent`** (reserves the outline's space so nothing shifts when it
+  activates), mono **uppercase 11px**, `letter-spacing 0.08em`. Always carries a leading
+  **dot** (7px circle).
+- **Inactive** — `color: var(--text-muted)`; background **transparent**; border stays
+  `1px solid transparent`; the dot is muted (`--text-light`). It's a pill-shaped hit-area
+  that reads as plain text until hovered (hover → `color: --midnight`).
+- **Active (`[data-active="true"]`)** — `color: var(--midnight)`; **`background: #ffffff`**
+  (`--card-bg`); **`border-color: var(--midnight)`** (now a visible 1px dark outline, radius
+  already 999px); the dot is colored by status: **`--volt`** (active, with a 1px midnight
+  ring) / **`--text-muted`** (archived) / **`--grove`** (shipped).
+- So the active tab is a **rounded white pill with a thin dark outline + a colored dot** —
+  **not** a solid fill, and **not** bare text. A first rebuild made it a solid volt fill; a
+  later one dropped the border + radius (transparent bg, `border-width:0`, `radius:0`). Both
+  wrong — the base radius/border-reserve above prevents that.
+- (Distinct from the **"+ Comment" toggle**, which genuinely *is* a volt fill when active —
+  don't conflate the two pill styles.)
 
 ### 9.4 Geometry, spacing & shadows
 
@@ -608,6 +662,60 @@ fetched**. Subtle but present on every page.
   **search**, and a **"Frequently used"** row backed by `localStorage` key
   `almanac.emoji.freq.v1` (max 12). **No emoji-picker library** (keeps the bundle lean).
   Picking closes the picker. Emoji cells tint on hover (~140ms).
+
+### 9.8 List rows & density (OBSERVED DIVERGENCE #3 — the index "felt different")
+
+The real index reads as a **dense, editorial list** — compact rows, hairline dividers, the
+metadata on the row's baseline (not stacked) — and a prior rebuild rendered it **airy and
+stacked**. These are reusable *list-row* rules (apply to any project/option/version list):
+
+- **Bullet marker.** Each project-row name is preceded by a **small muted bullet `•`** as a
+  list affordance — visible in the real surface. Reproduce it as a leading marker on every
+  row name (a `name::before { content: "•" }` in `--text-light`, or an equivalent leading
+  glyph). ⚠️ A prior rebuild omitted it. *(Implementation note: in the reference build the
+  marker is part of the list rendering rather than an explicit literal in the row markup —
+  match the **visual**, however you render it.)*
+- **Row layout = one baseline, not a stack.** A project row is a **horizontal grid**:
+  `[ • name ]  [ N options · M pins ]  [ open → ]` all aligned on the **same baseline**
+  (`grid-template-columns: 1fr auto auto`, `align-items: baseline`, gap ~24px). The
+  `updated <rel>` line is the **only** thing that wraps to a **second line** below
+  (`grid-column: 1 / -1`, small mono, `--text-light`). ⚠️ Do **not** stack `options · pins`
+  beneath the name — that was the divergence.
+- **Density / rhythm.** Rows are **compact with hairline dividers**: each row
+  `padding: 22px 0` with a `border-bottom: 1px solid --rule`; the list is a plain flex
+  column (no card chrome). The result is many rows visible at once (≈6+ on a laptop), not 2.
+  Counts/meta are **mono 12px**; the name is **sans 22px/500** (per §9.2 — *not* serif).
+- **Hover** (per §9.3): the whole row nudges `padding-left: 8px` and the "open →" arrow
+  slides `translateX(4px)` — both 180ms ease-out; the rename pencil appears only on hover.
+
+### 9.9 Rich surfaces — popover / activity panel / cluster (DIVERGENCE #5: under-detailed)
+
+The real stylesheet is ~520 rule-blocks / 73 hovers; the interactive surfaces carry most of
+that. Reproduce these states so the review UI doesn't read as a thin sketch:
+
+- **Pin popover** (Figma-style, rendered in the parent doc): fixed, **width 360px**,
+  `--card-bg`, 1px `--card-border-deep`, radius 12px, shadow
+  `0 14px 40px -8px rgba(1,0,10,.18), 0 2px 8px rgba(1,0,10,.06)`, entrance `pop-in 180ms
+  ease-out`. Header row: 36px avatar (`.fig-avatar.lg`) · author (sans 500) · relative ts (+
+  "· edited"). An **action row that is revealed/affirmed on hover** of the comment: a
+  **react** button (`☺` + a small `+`), a **✓ resolve** toggle (`[data-active]` → volt/
+  midnight when resolved), and a **⋯ menu** (Edit/Delete, author-only). Body is linkified
+  sans ~14px. Reaction **chips** toggle (`data-mine` = volt-tinted, `aria-pressed`). A
+  "✓ resolved" tag when resolved. Replies nested below (24px `.fig-avatar.sm`), then a reply
+  composer. Tombstone renders `[comment deleted by author]` in muted italic.
+- **Activity panel**: a **340px** right **drawer** on desktop (the `.viewer` reflows via
+  `padding-right: 340px`, 220ms ease-out), left-edge shadow `-14px 0 32px -16px rgba(1,0,10,
+  .18)`; a **bottom-sheet** (`sheet-up`) ≤720px. Header: "Comments `<n>` of `<total>`",
+  search, state pills (all/open/resolved), sort (recent/reactions), version chips. Each feed
+  row carries a `#<pinNumber>` + a **version chip** (`data-current` highlighted). Same
+  hover-revealed action row as the popover. Pills/chips use the standard tint/outline states.
+- **Cluster pop-list**: floating list (parent doc), shadow `0 16px 36px -10px rgba(1,0,10,
+  .32)`; rows = member avatar + author + body snippet; hover-tinted; Esc / outside-click
+  closes. The cluster **glyph** itself: 30px midnight square, inset round avatar, volt `+N`
+  badge (per §9.6).
+- **Modals** (new project / add option / add version): backdrop + centered card,
+  radius 12px, shadow `0 24px 60px rgba(1,0,10,.22)`; inputs get the **volt focus-ring**
+  `0 0 0 3px rgba(213,239,138,.45)`; primary submit = midnight pill (lifts on hover).
 
 ---
 
@@ -856,12 +964,27 @@ Each states an action and the observable expected result. Manual or headless (Pl
 
 Functional journeys 1–22 pass even on a wrong-looking build, so add these. Two tiers:
 **computed-style assertions** (deterministic, primary) and **screenshot diff** (high-fidelity
-gate, secondary). All run after a `@plow.co` test session is established.
+gate). All run after a `@plow.co` test session is established.
 
-23. **Fonts resolve correctly.** Via `getComputedStyle`: `body` `font-family` resolves to a
-    **DM Sans** stack; the hero/page-title `h1` resolves to **Instrument Serif** with
-    `font-style: italic` and `font-weight: 400`; a mono label (status pill / `.kbd`) resolves
-    to **DM Mono**. *Expect:* exact matches — this is what "the fonts look distinct" was.
+> **The gate must compare against the REAL Almanac — never against itself.** A self-captured
+> `toHaveScreenshot` baseline only proves the build is consistent with *itself*; it certifies
+> nothing about fidelity to production. (This bit us: a build with **serif** project-row
+> titles — a direct violation of §9.2, which pins row names to **sans** — passed "27/27"
+> because the computed checks sampled only `body`/`h1`/a mono label, and the screenshot baseline
+> was self-generated.) Two consequences, both load-bearing: (a) the computed-style checks must
+> sample the elements that actually drift — **project-row name, pill casing, metadata layout** —
+> not just the global tokens; (b) the screenshot baselines in J27 must be **captured from the
+> production Almanac** (`github.com/plow-pbc/almanac`, run locally with a minted `@plow.co`
+> session, or pulled from the deployed app) and shipped/committed as goldens — a baseline the
+> build generated from itself is not a gate.
+
+23. **Fonts resolve correctly — including the row name.** Via `getComputedStyle`: `body`
+    `font-family` resolves to a **DM Sans** stack; the hero/page-title `h1` resolves to
+    **Instrument Serif** with `font-style: italic` and `font-weight: 400`; a mono label
+    (status pill / `.kbd`) resolves to **DM Mono**; **and a project-row name resolves to the
+    DM Sans stack with `font-style: normal`** (per §9.2 — row/version-card names are *sans*,
+    **not** serif italic; a serif row title is the single most common fidelity miss and must
+    fail this check). *Expect:* exact matches — this is what "the fonts look distinct" was.
 24. **Tokens + shadows exact.** Computed `--volt` = `rgb(213,239,138)`; page bg = chalk;
     a card's `box-shadow` and a popover's `box-shadow` match the §9.4 ladder; radius on a
     card = 12px, on a pill = 999px.
@@ -874,11 +997,16 @@ gate, secondary). All run after a `@plow.co` test session is established.
 26. **Transition feel.** Computed `transition-duration`/`timing-function` on the sampled
     interactive elements are from the §9.3 ladder (default **180ms ease-out**; panel slide
     **220ms**). *Expect:* no `0s`/`linear` defaults left on interactive elements.
-27. **Screenshot diff (gate, ~0.2% threshold).** Baselines of: index, version-bar +
-    iframe, an open pin popover, the activity panel, a modal. Compared with Playwright
-    `toHaveScreenshot`. *Expect:* within threshold vs the captured-from-real baselines;
-    flags spacing/shadow/layout drift the computed checks can't. (Secondary — environment
-    sensitive; computed-style tiers 23–26 are the hard gate.)
+27. **Screenshot diff vs the PRODUCTION Almanac (real gate, not self-baseline).** Baselines of:
+    index, version-bar + iframe, an open pin popover, the activity panel, a modal — each
+    **captured from the real Almanac** (run `github.com/plow-pbc/almanac` locally with a minted
+    `@plow.co` session, same 1280×900 viewport, or pull from the deployed app) and committed as
+    goldens. Compare the rebuild with Playwright `toHaveScreenshot` (~0.2% threshold). *Expect:*
+    within threshold vs the **production** baselines — flags casing (`ALMANAC`/`+ NEW PROJECT`
+    vs lowercase), row typography (sans + leading bullet vs serif), metadata position
+    (right-aligned vs stacked), filter-pill treatment, and the type-scale/density drift the
+    computed checks can't. A baseline the build captured from itself does **not** satisfy this
+    journey — the comparison is circular and the result is void.
 
 ---
 

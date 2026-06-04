@@ -11,7 +11,7 @@ Env   : QUEUE_PORT(9900) QUEUE_SECRET('') TODO_DIR(~/mypeople/todos)
         PING_CRON_SEC(60) IDLE_GRACE_SEC(60) TODO_HTML(<dir>/todos.html)
         TODO_TEST_SINK(0)  BOSS_AGENT(main:Boss)
 """
-import http.server, json, os, threading, time, uuid, base64, subprocess, shutil
+import http.server, json, os, threading, time, uuid, base64, subprocess, shutil, datetime
 from pathlib import Path
 
 PORT        = int(os.environ.get("QUEUE_PORT", "9900"))
@@ -22,6 +22,11 @@ BOARD_PATH  = TODO_DIR / "board.v2.json"
 INBOX_LOG   = TODO_DIR / "boss-inbox.log"
 PING_CRON   = float(os.environ.get("PING_CRON_SEC", "120"))   # unassigned-card cron (CEO: 2 min)
 IDLE_GRACE  = float(os.environ.get("IDLE_GRACE_SEC", "60"))    # assigned idle-post-stop-hook (1 min)
+IDLE_STALL  = float(os.environ.get("IDLE_STALL_SEC", "300"))   # assigned-but-idle WATCHDOG threshold (5 min)
+STALL_REPING= float(os.environ.get("STALL_REPING_SEC", "300")) # re-ping throttle per stalled card
+WATCHDOG    = float(os.environ.get("WATCHDOG_SEC", "60"))      # watchdog scan interval
+STATUS_DIR  = Path(os.environ.get("STATUS_DIR", str(Path.home() / "mypeople" / "status")))
+PROJECTS_DIR= Path(os.environ.get("PROJECTS_DIR", str(Path.home() / ".claude" / "projects")))
 TEST_SINK   = os.environ.get("TODO_TEST_SINK", "0") == "1"
 BOSS_AGENT  = os.environ.get("BOSS_AGENT", "main:Boss")
 HTML_PATH   = Path(os.environ.get("TODO_HTML", str(Path(__file__).resolve().parent / "todos.html")))
@@ -137,6 +142,71 @@ def on_stop_hook(agent_id, hook_state):
         save(b)
     if hook_state == "idle":
         threading.Timer(IDLE_GRACE, check).start()
+
+# ── ping machine (c): ASSIGNED-BUT-IDLE WATCHDOG ─────────────────────────────
+# Real engineers don't POST /hook/stop, so machine (b) often never fires. This
+# watchdog actively detects an assigned engineer that has gone idle/stalled at
+# its prompt and pings the Boss. Signal (mypeople-native):
+#   * the agent's status.json (status='idle' + 'timestamp' = when it last STOPPED)
+#   * its Claude session transcript mtime (still being written == busy in a turn)
+# Stalled  := stopped > IDLE_STALL ago  AND  transcript not written in IDLE_STALL
+#             (so a long silent render reads as busy, not idle — no false stall).
+# Unknown agent (no status file) -> treat as stalled (err toward pinging, per CEO).
+def _iso_epoch(ts):
+    try: return datetime.datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp()
+    except Exception: return None
+
+def _status_for(agent_id):
+    try:
+        for p in STATUS_DIR.glob("*/*.json"):
+            try: d = json.loads(p.read_text())
+            except Exception: continue
+            if d.get("agent_id") == agent_id: return d
+    except Exception: pass
+    return None
+
+def _session_active_within(session_id, window):
+    if not session_id: return False
+    nowt = time.time()
+    try:
+        for p in PROJECTS_DIR.glob(f"*/{session_id}.jsonl"):
+            try:
+                if nowt - p.stat().st_mtime < window: return True
+            except Exception: continue
+    except Exception: pass
+    return False
+
+def assignee_idle_secs(agent_id):
+    """Idle seconds if the assigned agent looks parked/stalled, else None (active/grace)."""
+    d = _status_for(agent_id)
+    if not d: return IDLE_STALL + 1                         # no status -> can't confirm active -> stalled
+    if d.get("status") != "idle": return None              # explicitly busy
+    t = _iso_epoch(d.get("timestamp", ""))
+    idle_for = (time.time() - t) if t else IDLE_STALL + 1
+    if idle_for < IDLE_STALL: return None                  # recently stopped -> grace, may pick up next task
+    if _session_active_within(d.get("session_id"), IDLE_STALL): return None  # transcript moving -> busy turn
+    return idle_for
+
+def watchdog_loop():
+    while True:
+        time.sleep(WATCHDOG)
+        for tid in list(load().get("tasks", {}).keys()):
+            ping = None
+            with _lock:
+                b = load(); t = b["tasks"].get(tid)
+                if not t or not (t.get("workToDone") and t.get("state") in ("dispatched", "working") and t.get("assignee")):
+                    continue
+                idle = assignee_idle_secs(t["assignee"])
+                if idle is None:
+                    if t.get("stallPingTs"):                # agent recovered -> reset so next stall re-pings
+                        t["stallPingTs"] = 0; save(b)
+                    continue
+                if (time.time() - (t.get("stallPingTs") or 0)) >= STALL_REPING:
+                    t["stallPingTs"] = time.time(); save(b)
+                    ping = (t["assignee"], int(idle // 60))
+            if ping:
+                boss_ping(tid, f"WATCHDOG: assignee {ping[0]} IDLE/stalled ~{ping[1]}m at prompt "
+                               f"(no activity) — re-engage or reassign")
 
 # ── mutations ──────────────────────────────────────────────────────────────
 def apply_update(d):
@@ -291,6 +361,7 @@ if __name__ == "__main__":
     TODO_DIR.mkdir(parents=True, exist_ok=True)
     if not BOARD_PATH.exists(): save(_default_board())
     threading.Thread(target=cron_loop, daemon=True).start()
+    threading.Thread(target=watchdog_loop, daemon=True).start()
     print(f"todo-v2 :{PORT}  store={BOARD_PATH}  cron={PING_CRON}s grace={IDLE_GRACE}s "
-          f"sink={'file' if TEST_SINK else 'mp'}", flush=True)
+          f"stall={IDLE_STALL}s/scan{WATCHDOG}s sink={'file' if TEST_SINK else 'mp'}", flush=True)
     Server(("0.0.0.0", PORT), H).serve_forever()

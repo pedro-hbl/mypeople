@@ -51,6 +51,13 @@ before `ready`; `done` rejected unless `verified`.
 - **(a) unassigned active task** → cron every `PING_CRON_SEC` (prod **120s = 2 min**) pings the Boss.
 - **(b) assigned task** → `IDLE_GRACE_SEC` (prod **60s**) after that engineer's Stop hook, if still
   idle → ping the Boss. Toggling ON also enqueues a Boss message immediately.
+- **(c) assigned-but-idle WATCHDOG** → every `WATCHDOG_SEC` (60s) the server checks each
+  working+assigned card's engineer via its mypeople `status.json` (last-Stop time) **+** its Claude
+  session transcript mtime. Stalled := stopped > `IDLE_STALL_SEC` (prod **300s = 5 min**) ago AND no
+  transcript activity in that window (a long *silent* render still reads as busy → no false stall).
+  Then it pings the Boss to re-engage/reassign. Unknown agent (no status file) → pinged (err toward
+  nudging). This is what actually catches a parked engineer, since real engineers never POST
+  `/hook/stop` (so (b) rarely fires on its own).
 
 ---
 
@@ -97,9 +104,9 @@ invariant. Uses fast cadence + the sim engineer (a real runtime swaps in real `m
 set -euo pipefail
 INSTALL_DIR="${{INSTALL_DIR:-$HOME/mypeople}}"; BIN="$INSTALL_DIR/bin"
 export TODO_DIR=/tmp/todo-v2-verify QUEUE_PORT=9933 QUEUE_SECRET="" TODO_HOST=127.0.0.1:9933
-export TODO_HTML="$BIN/todos.html" PING_CRON_SEC=2 IDLE_GRACE_SEC=2 TODO_TEST_SINK=1
+export TODO_HTML="$BIN/todos.html" PING_CRON_SEC=2 IDLE_GRACE_SEC=2 WATCHDOG_SEC=999 TODO_TEST_SINK=1
 rm -rf "$TODO_DIR"; pkill -f todo-v2-server.py 2>/dev/null || true; sleep 1
-( QUEUE_PORT=9933 TODO_DIR="$TODO_DIR" TODO_HTML="$TODO_HTML" PING_CRON_SEC=2 IDLE_GRACE_SEC=2 \\
+( QUEUE_PORT=9933 TODO_DIR="$TODO_DIR" TODO_HTML="$TODO_HTML" PING_CRON_SEC=2 IDLE_GRACE_SEC=2 WATCHDOG_SEC=999 \\
   TODO_TEST_SINK=1 QUEUE_SECRET="" nohup python3 "$BIN/todo-v2-server.py" >/tmp/tv2.log 2>&1 & )
 sleep 1
 H=127.0.0.1:9933; J(){{ python3 -c "import sys,json;print(json.load(sys.stdin)$1)"; }}
@@ -132,8 +139,25 @@ TODO_HOST=$H python3 "$BIN/engineer-sim" $TID; sleep 1; RECON
 ck "$(G $TID state)" done "verified->done"; ck "$(G $TID verified)" True "verified flag"
 # invariant
 curl -fs $H/todo/board | python3 -c "import sys,json;b=json.load(sys.stdin);exit(0 if not [t for t in b['tasks'].values() if t['state']=='done' and not t['verified']] else 1)"
+
+# ── (c) assigned-but-idle WATCHDOG: a stalled assignee must ping the Boss (real engineers never POST /hook/stop) ──
+WSTAT=/tmp/tv2-wd-status; WPROJ=/tmp/tv2-wd-proj; rm -rf "$WSTAT" "$WPROJ" /tmp/tv2-wd-board; mkdir -p "$WSTAT/mc-t" "$WPROJ/p"
+printf '{{"agent_id":"t/eng-stalled","status":"idle","timestamp":"2020-01-01T00:00:00Z","session_id":"s1"}}' > "$WSTAT/mc-t/eng-stalled.json"
+( QUEUE_PORT=9935 TODO_DIR=/tmp/tv2-wd-board TODO_HTML="$TODO_HTML" QUEUE_SECRET="" TODO_TEST_SINK=1 \\
+  STATUS_DIR="$WSTAT" PROJECTS_DIR="$WPROJ" IDLE_STALL_SEC=2 WATCHDOG_SEC=1 STALL_REPING_SEC=1 \\
+  PING_CRON_SEC=999 IDLE_GRACE_SEC=999 nohup python3 "$BIN/todo-v2-server.py" >/tmp/tv2-wd.log 2>&1 & )
+sleep 1; WH=127.0.0.1:9935
+WTID=$(curl -fs -H 'Content-Type: application/json' -d '{{"op":"add","text":"WD"}}' $WH/todo/update | J "['id']")
+curl -fs -H 'Content-Type: application/json' -d "{{\\"op\\":\\"set\\",\\"id\\":\\"$WTID\\",\\"doneCondition\\":\\"x\\"}}" $WH/todo/update >/dev/null
+curl -fs -H 'Content-Type: application/json' -d "{{\\"id\\":\\"$WTID\\",\\"brainstorm\\":\\"b\\",\\"promote\\":\\"ready\\"}}" $WH/todo/brainstorm >/dev/null
+curl -fs -H 'Content-Type: application/json' -d "{{\\"op\\":\\"set\\",\\"id\\":\\"$WTID\\",\\"workToDone\\":true,\\"assignee\\":\\"t/eng-stalled\\"}}" $WH/todo/update >/dev/null
+curl -fs -H 'Content-Type: application/json' -d "{{\\"op\\":\\"set\\",\\"id\\":\\"$WTID\\",\\"state\\":\\"working\\"}}" $WH/todo/update >/dev/null
+sleep 4
+grep -q WATCHDOG /tmp/tv2-wd-board/boss-inbox.log || {{ echo "FAIL: watchdog did not ping for a stalled assignee"; exit 1; }}
+[ "$(curl -fs $WH/todo/board | J "['tasks']['$WTID']['pingsToBoss']")" -gt 1 ] || {{ echo "FAIL: watchdog ping not incrementing"; exit 1; }}
+
 pkill -f todo-v2-server.py 2>/dev/null || true
-echo "VERIFY_OK: todo-v2 — board drives Boss dispatch, ping machine (cron+idle->Boss), proof-gated verify, re-ping. SEED one-shot in a clean container."
+echo "VERIFY_OK: todo-v2 — board drives Boss dispatch, ping machine (cron-unassigned + idle-post-stophook + assigned-idle WATCHDOG -> Boss), proof-gated verify, re-ping. SEED one-shot in a clean container."
 ```
 
 ## Failure modes folded in

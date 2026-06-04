@@ -33,6 +33,7 @@ Each independently verifiable from a fresh shell.
 - `mp send <host>/main:worker-1 "msg"` types the message into the worker's pane via bracketed-paste, intact.
 - `mp peek <host>/main:worker-1` reports the agent's TRUE live state: a header `state=BUSY` while a turn is running (even if its composer holds a freshly-queued message) and `state=IDLE` when awaiting input — derived from the Claude TUI footer, not inferred from a raw buffer dump. The Boss can always tell a working agent from a stuck one.
 - When the worker's Stop hook fires: status JSON written, `[AGENT NOTIFICATION]` line typed into the Boss's pane via the queue.
+- When a worker raises an **AskUserQuestion** form (a blocked turn, not a Stop): the `PreToolUse` hook fires `[AGENT QUESTION]` to the Boss carrying the question + the exact offered options, and the Boss can unblock it remotely with `mp answer <agent> <option-number | text>` — which actually selects/submits the form so the agent proceeds. No silent hang on an interactive question.
 
 ## Inputs
 
@@ -55,8 +56,8 @@ Each independently verifiable from a fresh shell.
 |---|---|---|
 | `queue-server.py` | inline | HTTP queue: clients, agents, task submit/poll/result, dashboard; heartbeat reaper auto-prunes agents on hosts that stop heartbeating |
 | `queue-client.py` | inline | heartbeat + task dispatcher; tmux input via bracketed-paste |
-| `mp` CLI | inline | `spawn / send / peek / kill / status` |
-| `plugins/tmux-boss-hooks/` | inline | Claude Code hooks plugin: SessionStart / Stop / SessionEnd → status file + boss notification |
+| `mp` CLI | inline | `spawn / send / peek / kill / status / answer` (peek classifies BUSY/IDLE; answer submits an AskUserQuestion form) |
+| `plugins/tmux-boss-hooks/` | inline | Claude Code hooks plugin: SessionStart / Stop / SessionEnd → status file + boss notification; PreToolUse/AskUserQuestion → `[AGENT QUESTION]` to boss |
 | `boss-CLAUDE.md` | inline | doctrine read by every Boss at spawn |
 | `dashboard.html` | inline | HUD page, served from queue-server, polls /agents + /clients |
 | OS pkgs | apt: `tmux python3 jq procps ttyd tailscale` (with ttyd binary fallback) | |
@@ -478,7 +479,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
         if p == "/task/submit":
             action = data.get("action", "")
-            if action not in ("spawn", "send", "peek", "kill"):
+            if action not in ("spawn", "send", "peek", "kill", "answer"):
                 return self._json(400, {"error": f"unknown action {action!r}"})
             tid = uuid.uuid4().hex
             t = {
@@ -827,7 +828,60 @@ def execute_kill(task):
     return True, {"killed": target}
 
 
-HANDLERS = {"spawn": execute_spawn, "send": execute_send, "peek": execute_peek, "kill": execute_kill}
+def execute_answer(task):
+    """Answer an AskUserQuestion form the agent is BLOCKED on, then submit it —
+    so the Boss can unblock a remote question. A bare `send` only piles text into
+    the composer without selecting/submitting; this drives the actual widget.
+
+    payload.answer:
+      - an integer "N"  -> select option N of the (first) question. The widget
+                           opens with option 1 highlighted; Down moves the
+                           highlight, Enter confirms.
+      - any other text  -> type a free-form custom answer and submit it.
+    """
+    aid = task.get("target_agent", "")
+    parsed = parse_agent_id(aid)
+    if not parsed:
+        return False, "bad target_agent"
+    _, sess, tab = parsed
+    mc_sess = f"mc-{sess}"
+    target = f"{mc_sess}:{tab}"
+    if tmux_run("has-session", "-t", mc_sess).returncode != 0:
+        return False, f"session {mc_sess} does not exist"
+    answer = str(task.get("payload", {}).get("answer", "")).strip()
+    if not answer:
+        return False, "empty answer"
+
+    # Same copy-mode defense as tmux_send_text: a pane stuck in view-mode would
+    # eat the navigation keys.
+    r = tmux_run("display-message", "-t", target, "-p", "#{pane_in_mode}")
+    if r.returncode == 0 and r.stdout.strip() == "1":
+        tmux_run("send-keys", "-t", target, "-X", "cancel")
+        time.sleep(0.1)
+
+    if answer.isdigit():
+        n = int(answer)
+        if n < 1:
+            return False, "option number must be >= 1"
+        # Down (N-1) times from the default top highlight, then Enter to confirm.
+        for _ in range(n - 1):
+            tmux_run("send-keys", "-t", target, "Down")
+            time.sleep(0.08)
+        time.sleep(0.12)
+        r = tmux_run("send-keys", "-t", target, "Enter")
+        if r.returncode != 0:
+            return False, r.stderr.strip()
+        return True, {"answered": target, "selected_option": n}
+
+    # Free-form answer: type it literally and submit (custom-answer path).
+    ok, err = tmux_send_text(target, answer)
+    if not ok:
+        return False, err
+    return True, {"answered": target, "text": answer}
+
+
+HANDLERS = {"spawn": execute_spawn, "send": execute_send, "peek": execute_peek,
+            "kill": execute_kill, "answer": execute_answer}
 
 
 def task_loop():
@@ -1047,7 +1101,26 @@ def cmd_kill(cfg, args):
         print(f"Kill FAILED: {t.get('error', '?')}", file=sys.stderr); sys.exit(1)
 
 
-COMMANDS = {"status": cmd_status, "spawn": cmd_spawn, "send": cmd_send, "peek": cmd_peek, "kill": cmd_kill}
+def cmd_answer(cfg, args):
+    # Answer an AskUserQuestion form the agent is blocked on (option number or
+    # free text), actually selecting/submitting it so the agent proceeds.
+    if len(args) < 2:
+        print("Usage: mp answer <agent_id> <option-number | free text>", file=sys.stderr); sys.exit(2)
+    aid = canonicalize_agent_id(args[0], cfg["HOST_ID"])
+    answer = " ".join(args[1:])
+    body = {"action": "answer", "target_agent": aid, "payload": {"answer": answer}}
+    t = submit_and_wait(cfg, body, timeout=10)
+    if t["status"] == "done":
+        r = t.get("result") or {}
+        if "selected_option" in r:
+            print(f"Answered {aid}: selected option {r['selected_option']}")
+        else:
+            print(f"Answered {aid}: {r.get('text','submitted')}")
+    else:
+        print(f"Answer FAILED: {t.get('error', '?')}", file=sys.stderr); sys.exit(1)
+
+
+COMMANDS = {"status": cmd_status, "spawn": cmd_spawn, "send": cmd_send, "peek": cmd_peek, "kill": cmd_kill, "answer": cmd_answer}
 
 
 def main():
@@ -1084,6 +1157,7 @@ cat > "$INSTALL_DIR/plugins/tmux-boss-hooks/hooks/hooks.json" <<EOF
 {
   "hooks": {
     "SessionStart": [{"hooks": [{"type": "command", "command": "$INSTALL_DIR/plugins/tmux-boss-hooks/hooks/emit-event", "timeout": 5}]}],
+    "PreToolUse":   [{"matcher": "AskUserQuestion", "hooks": [{"type": "command", "command": "$INSTALL_DIR/plugins/tmux-boss-hooks/hooks/emit-event", "timeout": 10}]}],
     "Stop":         [{"hooks": [{"type": "command", "command": "$INSTALL_DIR/plugins/tmux-boss-hooks/hooks/emit-event", "timeout": 10}]}],
     "SessionEnd":   [{"hooks": [{"type": "command", "command": "$INSTALL_DIR/plugins/tmux-boss-hooks/hooks/emit-event", "timeout": 5}]}]
   }
@@ -1120,6 +1194,58 @@ TS=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 # Append to local log
 echo "{\"ts\":\"$TS\",\"event\":\"$EVENT\",\"agent_id\":\"$AGENT_ID\",\"session_id\":\"$SID\"}" >> "$LOG"
 
+# Parse session+tab from AGENT_ID = host/session:tab (used by every branch).
+HOST_PART="${AGENT_ID%%/*}"
+REST="${AGENT_ID#*/}"
+SESS_PART="${REST%%:*}"
+TAB_PART="${REST#*:}"
+STATUS_DIR="$INSTALL_DIR/status/mc-$SESS_PART"
+
+# --- PreToolUse / AskUserQuestion: an agent calling AskUserQuestion is about to
+# BLOCK on an interactive question form. The tool payload carries the question +
+# the exact options, so detect it HERE (a question is a blocked turn, not a Stop
+# — the Stop hook never fires for it, which is why a question used to hang
+# silently). Notify the Boss with the question + numbered options + how to
+# answer, so the Boss can unblock the agent remotely with `mp answer`. ---
+if [ "$EVENT" = "PreToolUse" ]; then
+  TOOL=$(echo "$INPUT" | jq -r '.tool_name // ""' 2>/dev/null || echo "")
+  [ "$TOOL" != "AskUserQuestion" ] && exit 0
+
+  # Render each question with NUMBERED options — the numbers are exactly what
+  # `mp answer <agent> <N>` selects (option N of the first/only question).
+  QBLOCK=$(echo "$INPUT" | jq -r '
+    [ .tool_input.questions[]?
+      | "Q: " + (.question // .header // "(question)")
+        + "\n   Options: "
+        + ([ (.options // [])
+             | to_entries[]
+             | "[\(.key + 1)] " + (.value.label // (.value | tostring)) ] | join("   ")) ]
+    | join("\n")' 2>/dev/null || echo "")
+  [ -z "$QBLOCK" ] && QBLOCK="(could not parse question payload)"
+
+  # Record a blocked-state status file so peek / the HUD show "waiting on a
+  # question" instead of looking idle.
+  mkdir -p "$STATUS_DIR"
+  jq -n --arg agent "$TAB_PART" --arg session "mc-$SESS_PART" --arg ts "$TS" \
+        --arg session_id "$SID" --arg summary "[QUESTION] $QBLOCK" \
+        --arg agent_id "$AGENT_ID" --arg boss_id "${BOSS_ID:-}" \
+    '{agent:$agent, session:$session, status:"blocked", timestamp:$ts, session_id:$session_id, summary:$summary, agent_id:$agent_id, boss_id:$boss_id}' \
+    > "$STATUS_DIR/$TAB_PART.json" 2>/dev/null || true
+
+  [ -z "${BOSS_ID:-}" ] && exit 0   # no boss to notify
+
+  NOTIF="[AGENT QUESTION] $AGENT_ID is BLOCKED on a question — answer to unblock:
+$QBLOCK
+Reply with:  mp answer $AGENT_ID <option-number | free text>"
+  BOSS_HOST="${BOSS_ID%%/*}"
+  PAYLOAD=$(jq -n --arg ta "$BOSS_ID" --arg th "$BOSS_HOST" --arg msg "$NOTIF" \
+    '{action:"send", target_agent:$ta, target_host:$th, payload:{message:$msg}}')
+  curl -fsS --max-time 3 -X POST "$QUEUE_URL/task/submit" \
+    -H "Content-Type: application/json" -H "X-Queue-Secret: $QUEUE_SECRET" \
+    -d "$PAYLOAD" >/dev/null 2>&1 || true
+  exit 0
+fi
+
 if [ "$EVENT" != "Stop" ]; then
   # SessionStart / SessionEnd: just log, no notification.
   exit 0
@@ -1132,14 +1258,7 @@ fi
 # the doctrine-keyword check in Verify.
 SUMMARY=$(echo "$LAST_MSG" | tr '\n' ' ' | cut -c1-1000)
 
-# Parse session+tab from AGENT_ID = host/session:tab
-HOST_PART="${AGENT_ID%%/*}"
-REST="${AGENT_ID#*/}"
-SESS_PART="${REST%%:*}"
-TAB_PART="${REST#*:}"
-
 # Write status file
-STATUS_DIR="$INSTALL_DIR/status/mc-$SESS_PART"
 mkdir -p "$STATUS_DIR"
 jq -n \
   --arg agent "$TAB_PART" \
@@ -1472,6 +1591,46 @@ for i in $(seq 1 12); do
   sleep 1
 done
 [ "$PEEK_BUSY" = 1 ] || { echo "FAIL: peek of a working agent never reported BUSY"; mp peek "main:worker-1" 2>&1 | head -1; exit 1; }
+
+# --- AskUserQuestion notifies the Boss, and `mp answer` unblocks the agent ---
+# A question form is a BLOCKED turn — the Stop hook never fires for it, so without
+# this the agent hangs silently. The PreToolUse/AskUserQuestion hook must notify
+# the Boss with the question + offered options, and the Boss must be able to
+# answer remotely (mp answer) to actually submit the form and let the agent
+# proceed. (AskUserQuestion is a core tool in the in-container Claude — this check
+# belongs to the fresh-container Verify.)
+for i in $(seq 1 20); do mp peek "main:worker-1" 2>&1 | head -1 | grep -q 'state=IDLE' && break; sleep 1; done
+QMARK="QOPT-$RANDOM"
+mp send "main:worker-1" "Call the AskUserQuestion tool now — header 'Pick', question 'Which one?' — with exactly two options labelled 'First $QMARK' and 'Second $QMARK'. Invoke the tool; do not answer it yourself." >/dev/null
+
+# 1) DETECT — the PreToolUse hook fired for AskUserQuestion.
+PRE_OK=0
+for i in $(seq 1 90); do
+  grep -q '"event":"PreToolUse"' "$INSTALL_DIR/run/hook-events.log" 2>/dev/null && { PRE_OK=1; break; }
+  sleep 1
+done
+[ "$PRE_OK" = 1 ] || { echo "FAIL: AskUserQuestion produced no PreToolUse hook event (tool not invoked / hook not firing)"; tail -5 "$INSTALL_DIR/run/hook-events.log"; exit 1; }
+
+# 2) NOTIFY — the Boss pane received [AGENT QUESTION] with the offered options.
+for i in $(seq 1 30); do
+  tmux capture-pane -t mc-main:Boss -p -S -300 | grep -qE "\[AGENT QUESTION\].*worker-1" && break; sleep 1
+done
+tmux capture-pane -t mc-main:Boss -p -S -300 | grep -qE "\[AGENT QUESTION\].*worker-1" || { echo "FAIL: Boss never received [AGENT QUESTION]"; exit 1; }
+tmux capture-pane -t mc-main:Boss -p -S -300 | grep -q "$QMARK" || { echo "FAIL: question notification missing the offered options ($QMARK)"; exit 1; }
+
+# 3) ANSWER — Boss selects option 2 via mp; the agent must UNBLOCK (form submits,
+#    the turn resumes and finishes → a fresh idle Stop status appears).
+rm -f "$INSTALL_DIR/status/mc-main/worker-1.json"
+mp answer "main:worker-1" 2 >/dev/null || { echo "FAIL: mp answer errored"; exit 1; }
+UNBLOCKED=0
+for i in $(seq 1 90); do
+  if jq -e '.status=="idle"' "$INSTALL_DIR/status/mc-main/worker-1.json" >/dev/null 2>&1; then UNBLOCKED=1; break; fi
+  sleep 1
+done
+[ "$UNBLOCKED" = 1 ] || { echo "FAIL: agent stayed blocked after mp answer (form never submitted)"; mp peek "main:worker-1" 2>&1 | head -1; exit 1; }
+# Soft check that the SELECTED option (2 = 'Second') reached the agent, not just any submit.
+jq -r .summary "$INSTALL_DIR/status/mc-main/worker-1.json" | grep -qiE "Second|option *2|2nd" \
+  || echo "WARN: post-answer summary didn't obviously reflect option 2 — review: $(jq -r .summary "$INSTALL_DIR/status/mc-main/worker-1.json" | head -c 200)"
 
 # --- HUD + ttyd ---
 

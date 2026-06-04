@@ -31,6 +31,7 @@ Each independently verifiable from a fresh shell.
 **Agent loop:**
 - `mp spawn <host>/main:worker-1 --backend claude --boss <host>/main:Boss` creates a worker tab whose env has `BOSS_ID=<host>/main:Boss`.
 - `mp send <host>/main:worker-1 "msg"` types the message into the worker's pane via bracketed-paste, intact.
+- `mp peek <host>/main:worker-1` reports the agent's TRUE live state: a header `state=BUSY` while a turn is running (even if its composer holds a freshly-queued message) and `state=IDLE` when awaiting input — derived from the Claude TUI footer, not inferred from a raw buffer dump. The Boss can always tell a working agent from a stuck one.
 - When the worker's Stop hook fires: status JSON written, `[AGENT NOTIFICATION]` line typed into the Boss's pane via the queue.
 
 ## Inputs
@@ -753,6 +754,30 @@ def execute_send(task):
     return True, {"delivered_to": target}
 
 
+# Claude Code's TUI prints "esc to interrupt" in its footer ONLY while a turn is
+# actively running; when the agent is idle the footer is just the bypass-perms
+# hint and the composer (❯) awaits input. That token is the ground-truth busy
+# signal. A raw `capture-pane` dump buries it under the composer + footer, so an
+# agent that's mid-turn (e.g. installing) — especially one whose composer holds a
+# freshly-queued `mp send` — reads as idle/stuck. peek must classify and surface
+# the live state, not make the Boss infer it from the bottom of a text wall.
+PEEK_BUSY_MARKER = "esc to interrupt"
+
+
+def peek_state(pane_text):
+    """Classify a Claude agent pane as BUSY / IDLE / UNKNOWN from its live frame.
+
+    Only the tail (the on-screen UI chrome — status line, composer, footer) is
+    inspected so a stale scrollback line can't spoof the state."""
+    tail = "\n".join(pane_text.splitlines()[-15:])
+    low = tail.lower()
+    if PEEK_BUSY_MARKER in low:
+        return "BUSY", "a turn is actively running (esc-to-interrupt present)"
+    if "❯" in tail or "bypass permissions on" in low:
+        return "IDLE", "awaiting input (no turn running)"
+    return "UNKNOWN", "no Claude TUI footer detected (starting up, a shell, or exited)"
+
+
 def execute_peek(task):
     aid = task.get("target_agent", "")
     parsed = parse_agent_id(aid)
@@ -762,10 +787,16 @@ def execute_peek(task):
     target = f"mc-{sess}:{tab}"
     if tmux_run("has-session", "-t", f"mc-{sess}").returncode != 0:
         return False, f"session mc-{sess} does not exist"
+    # One fresh capture: visible frame (bottom = live state) + 200 lines of
+    # scrollback for work context. Classify the frame, then surface the verdict
+    # in a header so the Boss gets an accurate read at a glance.
     r = tmux_run("capture-pane", "-t", target, "-p", "-S", "-200")
     if r.returncode != 0:
         return False, r.stderr.strip()
-    return True, {"content": r.stdout}
+    pane = r.stdout
+    state, detail = peek_state(pane)
+    header = f"[mp peek {aid}] state={state} — {detail}\n" + ("─" * 72) + "\n"
+    return True, {"content": header + pane, "state": state, "activity": detail}
 
 
 def execute_kill(task):
@@ -1413,6 +1444,34 @@ tmux capture-pane -t mc-main:Boss -p -S -300 | grep -qE "\[AGENT NOTIFICATION\].
   tmux capture-pane -t mc-main:Boss -p -S -300 | tail -25
   exit 1
 }
+
+# --- mp peek reports TRUE live activity (BUSY vs IDLE), not a stale buffer ---
+# Deterministic classifier gate: the busy/idle verdict must come from the live
+# footer ("esc to interrupt" = a turn is running), and a queued message in the
+# composer must NOT spoof an idle read.
+python3 - "$INSTALL_DIR/bin/queue-client.py" <<'PY' || { echo "FAIL: peek_state classifier wrong"; exit 1; }
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("qc", sys.argv[1])
+qc = importlib.util.module_from_spec(spec); spec.loader.exec_module(qc)
+busy = "● Running install…\n────\n❯ go install the thing\n────\n  ⏵⏵ bypass permissions on (shift+tab to cycle) · esc to interrupt\n"
+idle = "✻ Cooked for 17s\n────\n❯ \n────\n  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents\n"
+assert qc.peek_state(busy)[0] == "BUSY", qc.peek_state(busy)
+assert qc.peek_state(idle)[0] == "IDLE", qc.peek_state(idle)
+print("peek_state OK: busy->BUSY, idle->IDLE (queued composer text did not spoof)")
+PY
+
+# Live IDLE gate: the worker finished its turn above, so peek must say IDLE.
+mp peek "main:worker-1" 2>&1 | head -1 | grep -q 'state=IDLE' || { echo "FAIL: peek of idle worker didn't report IDLE"; mp peek "main:worker-1" 2>&1 | head -1; exit 1; }
+
+# Live BUSY gate: hand the worker a slow tool call; while it runs, peek must say
+# BUSY (this is the exact defect — a working agent must never read as idle).
+mp send "main:worker-1" "Run this bash command now, nothing else: sleep 8; echo SLOWDONE" >/dev/null
+PEEK_BUSY=0
+for i in $(seq 1 12); do
+  if mp peek "main:worker-1" 2>&1 | head -1 | grep -q 'state=BUSY'; then PEEK_BUSY=1; break; fi
+  sleep 1
+done
+[ "$PEEK_BUSY" = 1 ] || { echo "FAIL: peek of a working agent never reported BUSY"; mp peek "main:worker-1" 2>&1 | head -1; exit 1; }
 
 # --- HUD + ttyd ---
 

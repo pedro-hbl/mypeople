@@ -911,8 +911,12 @@ def peek_state(pane_text):
     """Classify a Claude agent pane as BUSY / IDLE / UNKNOWN from its live frame.
 
     Only the tail (the on-screen UI chrome — status line, composer, footer) is
-    inspected so a stale scrollback line can't spoof the state."""
-    tail = "\n".join(pane_text.splitlines()[-15:])
+    inspected so a stale scrollback line can't spoof the state. Use the last 15
+    NON-BLANK lines: `capture-pane -S` leaves trailing blank rows on a tall pane
+    (e.g. a wide ttyd-attached container is 70+ rows), which would push the
+    footer/composer out of a raw last-15 slice and mis-read a healthy idle agent
+    as UNKNOWN."""
+    tail = "\n".join([l for l in pane_text.splitlines() if l.strip()][-15:])
     low = tail.lower()
     if PEEK_BUSY_MARKER in low:
         return "BUSY", "a turn is actively running (esc-to-interrupt present)"

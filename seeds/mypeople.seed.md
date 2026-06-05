@@ -671,20 +671,55 @@ def reannounce_agents():
             _save_agents(d)
 
 
+def _composer_stuck(target):
+    """True if the composer is still holding an UN-submitted draft.
+
+    A bracketed paste that lands at/after turn-end collapses into a multiline
+    paste-draft — '[Pasted text #N]' with a trailing newline — whose cursor
+    sits on a hidden 2nd line, so a bare Enter only EDITS the draft and the
+    message never submits (the agent looks alive but never runs the command).
+    Detect that by scanning ONLY the composer region (the ❯ prompt line down to
+    the bypass-permissions footer), so a queued/echoed paste reference ABOVE the
+    composer doesn't false-positive. If a turn is running ('esc to interrupt'),
+    the message clearly submitted."""
+    r = tmux_run("capture-pane", "-t", target, "-p")
+    if r.returncode != 0:
+        return False
+    txt = r.stdout
+    if "esc to interrupt" in txt.lower():
+        return False
+    lines = txt.splitlines()
+    pi = None
+    for i in range(len(lines) - 1, -1, -1):
+        if lines[i].lstrip().startswith("❯"):   # ❯ composer prompt
+            pi = i
+            break
+    if pi is None:
+        return False
+    region = []
+    for l in lines[pi:]:
+        if "bypass permissions on" in l.lower():
+            break
+        region.append(l)
+    first_after_prompt = region[0].split("❯", 1)[1] if "❯" in region[0] else ""
+    extra = "\n".join(region[1:]).strip()
+    return bool(first_after_prompt.strip()) or bool(extra) or ("[pasted text" in "\n".join(region).lower())
+
+
 def tmux_send_text(target, text):
-    """Bracketed-paste safe send + Enter, with symmetric pane-state defense.
+    """Bracketed-paste send that reliably SUBMITS, with copy-mode defense.
 
-    Single biggest historical source of unreliability: typing into a pane
-    that's in tmux's copy-mode (user scrolled with the mouse, selected text,
-    or otherwise entered a view-mode). In that state, send-keys types INTO
-    copy-mode commands instead of the TUI's input buffer — silent failure
-    that's invisible to the sender.
-
-    Defense (tmux-primitive only, no TUI-specific assumptions): if
-    `pane_in_mode == 1`, send `-X cancel` to return the pane to its primary
-    buffer. Apply the check BOTH before typing (so the paste lands) AND
-    after Enter (so the pane is left clean for any human who picks it up
-    next — `pane_in_mode == 0` is an invariant of this function's return).
+    Two failure modes are handled:
+    1. copy-mode: typing into a pane in tmux's view-mode types INTO copy-mode
+       commands, not the composer. Cancel it before AND after.
+    2. turn-end paste-draft: a paste landing at/after turn-end captures the
+       follow-up Enter as a trailing newline, becoming a '[Pasted text #N]'
+       draft that never submits and that bare Enters only edit. We submit with
+       a DELAYED Enter (so it isn't absorbed into the paste), then VERIFY the
+       composer actually emptied / the agent went busy; if it's still stuck we
+       recover — BSpace to eat the trailing newline + Enter, then the proven
+       Up + Enter — until it submits. The recovery keys are gated behind the
+       stuck-check so a cleanly-submitted message is never corrupted.
     """
     # Exit copy-mode / view-mode if active.
     r = tmux_run("display-message", "-t", target, "-p", "#{pane_in_mode}")
@@ -692,19 +727,39 @@ def tmux_send_text(target, text):
         tmux_run("send-keys", "-t", target, "-X", "cancel")
         time.sleep(0.1)
 
-    # Bracketed-paste send.
-    safe = text.replace(PASTE_END, "").replace(PASTE_START, "")
+    # Bracketed-paste send (strip any trailing newline so we control submission).
+    safe = text.replace(PASTE_END, "").replace(PASTE_START, "").rstrip("\n")
     payload = f"{PASTE_START}{safe}{PASTE_END}"
     r = tmux_run("send-keys", "-t", target, "-l", "--", payload)
     if r.returncode != 0:
         return False, r.stderr.strip()
-    time.sleep(0.1)
+
+    # DELAYED submit: let the paste fully settle before Enter so the Enter is
+    # processed as a submit instead of being absorbed into the paste buffer.
+    time.sleep(0.3)
     r = tmux_run("send-keys", "-t", target, "Enter")
     if r.returncode != 0:
         return False, r.stderr.strip()
+    time.sleep(0.35)
+
+    # VERIFY submission; recover a stuck paste-draft (BSpace+Enter, then Up+Enter).
+    for _attempt in range(3):
+        if not _composer_stuck(target):
+            break
+        sys.stderr.write(f"{time.strftime('%H:%M:%S')} mp send: paste-draft did not submit, recovering (attempt {_attempt + 1}) -> {target}\n")
+        tmux_run("send-keys", "-t", target, "BSpace")   # eat the trailing newline
+        time.sleep(0.15)
+        tmux_run("send-keys", "-t", target, "Enter")
+        time.sleep(0.3)
+        if not _composer_stuck(target):
+            break
+        tmux_run("send-keys", "-t", target, "Up")       # proven recovery: reach the draft line
+        time.sleep(0.15)
+        tmux_run("send-keys", "-t", target, "Enter")
+        time.sleep(0.3)
 
     # Post-injection mirror: ensure pane is left in text-editing mode.
-    time.sleep(0.15)
+    time.sleep(0.1)
     r = tmux_run("display-message", "-t", target, "-p", "#{pane_in_mode}")
     if r.returncode == 0 and r.stdout.strip() == "1":
         tmux_run("send-keys", "-t", target, "-X", "cancel")

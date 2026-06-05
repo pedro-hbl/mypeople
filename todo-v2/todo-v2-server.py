@@ -29,7 +29,7 @@ STATUS_DIR  = Path(os.environ.get("STATUS_DIR", str(Path.home() / "mypeople" / "
 PROJECTS_DIR= Path(os.environ.get("PROJECTS_DIR", str(Path.home() / ".claude" / "projects")))
 BUSY_CPU    = float(os.environ.get("BUSY_CPU_PCT", "20"))      # watchdog: process-tree CPU% above this == busy (long job)
 BUSY_NAMES  = set(n.strip() for n in os.environ.get("BUSY_NAMES",
-    "ffmpeg,docker,buildkitd,containerd,rsync,scp,wget,curl,git,make,cmake,ninja,cargo,rustc,"
+    "ffmpeg,docker,buildkitd,containerd,rsync,scp,ssh,sftp,wget,curl,git,make,cmake,ninja,cargo,rustc,"
     "gcc,cc,clang,ld,collect2,tsc,webpack,vite,esbuild,rollup,next,vercel,bun,sox,whisper").split(",") if n.strip())
 TEST_SINK   = os.environ.get("TODO_TEST_SINK", "0") == "1"
 BOSS_AGENT  = os.environ.get("BOSS_AGENT", "main:Boss")

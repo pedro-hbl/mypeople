@@ -1,6 +1,6 @@
-## Rule 4 — The priority board IS the queue (TODO v2)
+## Rule 4 — The priority board IS the queue (TODO)
 
-Installed by `seeds/todo-v2.seed.md`. Appended to the Boss doctrine. Depends on Rules 1–3.
+Installed by `seeds/todo.seed.md`. Appended to the Boss doctrine. Depends on Rules 1–3.
 
 The CEO's board at `http://127.0.0.1:9900/todos` (store `~/mypeople/todos/board.v2.json`) is your
 **source of truth for priorities**. You co-manage it with the CEO. The ordered list of tasks that
@@ -18,13 +18,13 @@ Every ping carries the task id, state, assignee, and `lastStatus`.
 Run the reconcile pass (`todo-reconcile` encodes the deterministic part; you supply judgment):
 
 1. **`needs_brainstorm`** → you **brainstorm the task** (scope, approach, risks, the concrete
-   done-check). Write it back: `POST /todo/brainstorm {id, brainstorm, promote:"ready"}`. Not
-   dispatchable before `ready`.
-2. **`ready` + `workToDone` + no assignee** → pick an **idle** engineer (`mp status`), set
+   done-check). Write it back: `POST /todo/brainstorm {id, brainstorm, promote:"working"}`. Not
+   workable before brainstorm (the server enforces the gate).
+2. **`working` + `workToDone` + no assignee** → pick an **idle** engineer (`mp status`), set
    `assignee`, and **dispatch via `mp send`** a prompt built from
-   `text + "DONE-CONDITION: "+doneCondition + "attach proof via POST /todo/proof, then POST
-   /todo/status state=awaiting_verify"`. Set `state=dispatched`. (Rule 3: always via `mp`.)
-3. **`awaiting_verify` + proof present** → **VERIFY the done-condition against the proof/artifact**
+   `text + "DONE-CONDITION: "+doneCondition + "attach proof via POST /todo/proof (stay 'working');
+   the Boss verifies → done"`. (Rule 3: always via `mp`.) The card stays `working`.
+3. **`working` + proof present** → **VERIFY the done-condition against the proof/artifact**
    (trust the artifact, not the self-report):
    - Satisfied → `POST /todo/status {id, verified:true, state:"done"}`. Free the engineer.
    - Not satisfied → `POST /todo/status {id, state:"working", lastStatus:"not ready because X"}`

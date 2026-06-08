@@ -2,8 +2,8 @@
 """todo-reconcile — the deterministic mechanics of Boss Rule 4.
 
 The Boss runs this on every ping/Stop/change. It does the non-judgment parts:
-  - ready + workToDone + unassigned  -> assign an idle engineer + dispatch
-  - awaiting_verify + proof          -> auto-verify machine-checkable conditions
+  - working + workToDone + unassigned -> assign an idle engineer + dispatch
+  - working + proof present            -> auto-verify machine-checkable conditions
 Judgment parts (brainstorm wording, fuzzy verification) stay with the Boss.
 
 Env:
@@ -36,7 +36,7 @@ def pick_idle(b):
 
 def dispatch(eng, t):
     prompt = (f"{t['text']}\nDONE-CONDITION: {t['doneCondition']}\n"
-              f"When done, attach proof: POST /todo/proof, then POST /todo/status state=awaiting_verify.")
+              f"When done, attach proof: POST /todo/proof (stay 'working'); the Boss verifies -> done.")
     if DISP == "mp" and (sub := __import__('shutil').which("mp")):
         subprocess.run(["mp", "send", eng, prompt], timeout=15)
     elif DISP == "sim" and ESIM:
@@ -65,13 +65,12 @@ def main():
         if not t or not t.get("workToDone") or t.get("state") == "done":
             continue
         st = t["state"]
-        if st == "ready" and not t.get("assignee"):
+        if st == "working" and not t.get("assignee"):
             eng = pick_idle(b)
             if eng:
                 post("/todo/update", {"op": "set", "id": tid, "assignee": eng})
-                post("/todo/update", {"op": "set", "id": tid, "state": "dispatched"})
                 dispatch(eng, t); acted.append(f"dispatch {tid}->{eng}")
-        elif st == "awaiting_verify" and t.get("proofs"):
+        elif st == "working" and t.get("proofs"):
             res = verify_condition(t.get("doneCondition", ""), t)
             if res is True:
                 post("/todo/status", {"id": tid, "verified": True, "state": "done"})

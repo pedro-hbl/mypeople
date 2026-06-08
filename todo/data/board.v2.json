@@ -1,6 +1,14 @@
 {
   "version": "v2",
   "order": [
+    "4cb6e7ad0da6",
+    "a1358bbf59a9",
+    "aa0f2a73d208",
+    "f180de28e548",
+    "9a0e1e1a6170",
+    "c2237f78e82a",
+    "94535f6ebed3",
+    "3afff19b84a4",
     "368c802bcb57",
     "9a76f4d015c2",
     "f28b4a6a28ca",
@@ -12,7 +20,6 @@
     "decdb5094955",
     "a939d3de63a3",
     "5bbdc9988a6f",
-    "405be2167bb0",
     "0d7b0e43a0d3",
     "c452e034eef4",
     "4c0d996202ef"
@@ -98,25 +105,6 @@
       "created": 1780511320933,
       "updated": 1780577123906
     },
-    "405be2167bb0": {
-      "id": "405be2167bb0",
-      "text": "make sure that the airbnb manager is up and running after the machine reboots",
-      "doneCondition": "verified that it is really working; with Tailscale funnel; reboot persistent; ",
-      "brainstorm": "Scope (Boss, no open questions): boot-time auto-recovery so the airbnb manager comes back by itself after a machine reboot \u2014 cloudflared tunnel up, Hostex auto-repatch, streams auto-restart, and stack restart policies. Fold the recovery into the airbnb seed.",
-      "workToDone": true,
-      "assignee": "daniels-MacBook-Pro-2/airbnb:eng-1",
-      "state": "blocked",
-      "verified": false,
-      "lastStatus": "BUILD COMPLETE + verified on remote (PR #21, plow-pbc/seed-hermes-airbnb-manager v0.6.0): webhook secret-path auth, ngrok reboot-proof boot-service, Hostex re-point, stream/stack restart policies, AND Gather screen-grant HEADLESS on reboot (restore token + persistent mode, commit 3247e86 verified on remote - no manual click). ALL folded into the seed. ONLY remaining: an actual reboot-test to prove end-to-end recovery - CEO-gated (blinks live feed ~10-15s). Engineer work DONE; awaiting CEO reboot-window.",
-      "proofs": [],
-      "subs": [],
-      "pingsToBoss": 5,
-      "assignedAt": 1780525302342,
-      "lastStopTs": null,
-      "created": 1780525170118,
-      "updated": 1780585663519,
-      "stallPingTs": 1780585504.292032
-    },
     "5bbdc9988a6f": {
       "id": "5bbdc9988a6f",
       "text": "Make sure the Postiz 15 min publishing TO-POST videos is working reliably so that the editor can simply add more video to be automatically posted",
@@ -180,18 +168,18 @@
       "doneCondition": "job done when I can open the result file and watch the automatically edited video with the 2 cams; ",
       "brainstorm": "Automatic 2-cam (A/B) editing pipeline for the interactive-live recordings C4819 (cam A) + C4765 (cam B). Steps: (1) find/use the existing camera-A,B editing flow, do NOT reinvent if it exists; (2) sync the two cams; (3) silence-removal + extract SYNCHRONIZED good segments across both, discard bad segments - GENERAL/automatic, NOT hardcoded thresholds; (4) render a result the CEO can open and watch with both cams. CONSTRAINT: macOS hardware encoding only (hevc_videotoolbox -tag:v hvc1 / h264_videotoolbox), NEVER libx264/libx265 (files are ~10-11GB each). Done = CEO opens the output file and watches the auto-edited 2-cam video. Owner: editor:eng-1.",
       "workToDone": true,
-      "assignee": "daniels-MacBook-Pro-2/editor:eng-1",
-      "state": "working",
-      "verified": false,
-      "lastStatus": "Re-running on the mac-mini (M4): full multicam-edit-v2 flow (sync, silence-removal, LLM camera-selection, 6 editing rules, HW encode+decode on M4), sync validated by transcription-match, deliver to CEO Desktop. Heavy work offloaded to M4.",
+      "assignee": "daniels-MacBook-Pro-2/browsertest-3:eng-1",
+      "state": "done",
+      "verified": true,
+      "lastStatus": "CEO approved drift-fixed cut (QA-passed by browsertest-3 with own-tooling A/V + cam-B end-of-session SSIM). Now archiving to Dropbox /<recording-date>/processado/.",
       "proofs": [],
       "subs": [],
-      "pingsToBoss": 7,
-      "assignedAt": 1780665443259,
+      "pingsToBoss": 13,
+      "assignedAt": 1780701426240,
       "lastStopTs": null,
       "created": 1780583217491,
-      "updated": 1780665485702,
-      "stallPingTs": 0
+      "updated": 1780922670704,
+      "stallPingTs": 1780702095.288543
     },
     "b90e600fb81e": {
       "id": "b90e600fb81e",
@@ -274,16 +262,16 @@
       "brainstorm": "Achieve a true one-COMMAND install of Almanac via the seed page (import format). Investigate what the seed page is, the required import format, and the root cause of Mary's import failure (renamed almanac.seed.md->SEED.md, still failed), then fix so a stranger installs in one command.",
       "workToDone": false,
       "assignee": "daniels-MacBook-Pro-2/almanac-verify:eng-1",
-      "state": "working",
-      "verified": false,
-      "lastStatus": "Import FIXED \u2014 root cause: SEED.md must be at the repo ROOT on GitHub (Mary renamed only her local clone; the repo still had almanac.seed.md). Now SEED.md at repo root on main (200), import gate passes, one-command install proven + QA-signed. REMAINING (CEO-gated): confirm it's listed on seedbank + finalize the exact install command before done.",
+      "state": "done",
+      "verified": true,
+      "lastStatus": "Closed as obsolete \u2014 curl installer abandoned for paste-the-seed; KV-fix value already merged (a1b86fe).",
       "proofs": [],
       "subs": [],
       "pingsToBoss": 0,
       "assignedAt": 1780663626476,
       "lastStopTs": null,
       "created": 1780663626475,
-      "updated": 1780663896627
+      "updated": 1780923304635
     },
     "9a76f4d015c2": {
       "id": "9a76f4d015c2",
@@ -320,6 +308,205 @@
       "lastStopTs": null,
       "created": 1780663626481,
       "updated": 1780663626483
+    },
+    "3afff19b84a4": {
+      "id": "3afff19b84a4",
+      "text": "Seedbed install recorder \u2014 native browser video, harden-loop validated",
+      "doneCondition": "",
+      "brainstorm": "Build a recorder that captures the FULL LIFETIME of a seedbed as real native browser VIDEO (Playwright recordVideo or equivalent \u2014 NOT screenshot-stitch). Runs continuously (hours/days OK), stops ONLY when the CEO approves+retires the seedbed OR asks for the video \u2014 never a timer/live-URL/agent-judgment. Validate via the harden loop: prove on a fresh seedbed that it records a real video end-to-end, fold into the seed, QA-signed. Present to CEO only when truly done + working.",
+      "workToDone": false,
+      "assignee": "daniels-MacBook-Pro-2/recordtest:eng-1",
+      "state": "done",
+      "verified": true,
+      "lastStatus": "DONE \u2705 seedrec folded into seedbed.seed.md (Step 7.6), QA-signed; native-browser-video recorder runs the seedbed's full lifetime, stops on CEO approve/retire or request. Sample: ~/Downloads/seedrec-install-sample.mp4.",
+      "proofs": [],
+      "subs": [],
+      "pingsToBoss": 0,
+      "assignedAt": 1780686775777,
+      "lastStopTs": null,
+      "created": 1780686775773,
+      "updated": 1780695982175
+    },
+    "94535f6ebed3": {
+      "id": "94535f6ebed3",
+      "text": "Eu gostaria de transformar o meu projeto do teleprompter junto com a sele\u00e7\u00e3o, o projeto de sele\u00e7\u00e3o do script que faz parte do roteiro, que modifica o conte\u00fado do teleprompter em tempo real. Eu gostaria de ter esse projeto em uma seed, ent\u00e3o at\u00e9 que eu, como usu\u00e1rio, consiga instalar uma seed fresca e usar o teleprompter de forma \u00fatil para gravar um v\u00eddeo. O trabalho n\u00e3o est\u00e1 pronto.",
+      "doneCondition": "at\u00e9 que eu, como usu\u00e1rio, consiga instalar uma seed fresca e usar o teleprompter de forma \u00fatil para gravar um v\u00eddeo. O trabalho n\u00e3o est\u00e1 pronto. ",
+      "brainstorm": "Turn the CEO's existing teleprompter project (+ the script-selection / roteiro feature that modifies the teleprompter content in REAL TIME) into a SEED \u2014 so a fresh user installs the seed and can actually use the teleprompter to record a video. Done = a fresh install of the seed yields a working, useful teleprompter (real-time script-driven content), proven via the harden loop (Rule 14: fresh seedbed hydrates the seed -> working teleprompter). Owner: teleprompter:eng-1. First find the existing project + understand it, then design the seed.",
+      "workToDone": true,
+      "assignee": "daniels-MacBook-Pro-2/server:eng-1",
+      "state": "done",
+      "verified": true,
+      "lastStatus": "DONE \u2014 true intent-spec seed (spec is the asset, bundle removed), blind-rebuild proven + Boss-verified; published to public repo. Remaining = CEOs optional seedbank re-import (submit the updated repo, like Almanac).",
+      "proofs": [
+        {
+          "id": "dacbd0ec1199",
+          "type": "text",
+          "ref": "Boss-verified (not builder word): (1) public repo plow-pbc/teleprompter-seed HEAD 69111dd = 833-line intent-spec SEED.md at root, app bundle REMOVED (gh api: no teleprompter/ path, 404). (2) Blind-rebuild proven TWICE \u2014 a blind agent built the working teleprompter from spec alone; Boss verified blind2 presenting.png (Online + presenting + cyan live word-swap = ENTER swap + roteiro script-selection, zero reference code). (3) Real install videos finalized (~/Downloads/tp-N-install-recording.mp4, frame-verified). (4) Running apps independently QA-verified (tpqa).",
+          "caption": "",
+          "by": "Boss",
+          "ts": 1780940549257
+        }
+      ],
+      "subs": [],
+      "pingsToBoss": 12,
+      "assignedAt": 1780937325604,
+      "lastStopTs": null,
+      "created": 1780690722860,
+      "updated": 1780940549259,
+      "stallPingTs": 1780940507.4418502
+    },
+    "c2237f78e82a": {
+      "id": "c2237f78e82a",
+      "text": "Watchmepivot stream is not running;",
+      "doneCondition": "Find the issue with the stream;  s\u00f3 est\u00e1 pronto depois que eu garantir que o EC2 est\u00e1 rodando com as strings, tudo funcionando como deveria estar em produ\u00e7\u00e3o, a live funcionando na Twitch e os arquivos sendo salvos no EC3, tudo em produ\u00e7\u00e3o, como deve ser, funcionando corretamente. ",
+      "brainstorm": "ec2:eng-1 investigating root cause: locate the watchmepivot EC2 (all regions), CloudTrail timeline for why it went down, recoverability (EBS intact?), then restore if non-destructive (start + verify stream live with real evidence). Findings-first if terminated/ambiguous.",
+      "workToDone": true,
+      "assignee": "daniels-MacBook-Pro-2/ec2:eng-1",
+      "state": "done",
+      "verified": true,
+      "lastStatus": "DONE \u2705 stream restored (root cause: EC2 network-impairment -> host-migration fix). INDEPENDENT QA: 'validated by browsertest-2:eng-1: PASS' \u2014 2 frames ~32s apart differ (live subject motion, YAVG 11.74), Boss reviewed screenshots (~/Downloads/qa-watchmepivot/). Preventive follow-ups in flight (batch load off the box + external health monitor, already drill-tested).",
+      "proofs": [],
+      "subs": [],
+      "pingsToBoss": 2,
+      "assignedAt": 1780696750960,
+      "lastStopTs": null,
+      "created": 1780696666081,
+      "updated": 1780698098892
+    },
+    "9a0e1e1a6170": {
+      "id": "9a0e1e1a6170",
+      "text": "A string do Gather est\u00e1 funcionando no Ceynol. Ela \u00e9 uma string que \u00e9 aberta manualmente; n\u00e3o tem nenhuma automa\u00e7\u00e3o que vai tentar reabri-la em loop. Toda vez que eu quiser iniciar ela, eu tenho que selecionar o aplicativo manualmente para botar a string pra funcionar.",
+      "doneCondition": "  Est\u00e1 pronto quando tiver um arquivo l\u00e1 no desktop da m\u00e1quina SayNo que descreve como come\u00e7ar a stream do Gather. Eu consigo pedir pra um agente iniciar o Flow pra mim, pra eu selecionar o aplicativo do Gather e ele come\u00e7ar a transmiss\u00e3o tanto para o EC2 quanto para a Twitch. ",
+      "brainstorm": "Folded into airbnb:eng-1 sayno work. Done = Gather stream starts AND restarts reliably WITHOUT manual app-selection (durable fix: persist the xdg screen-share portal approval / restore_token). Immediate: get it streaming; then prove no-manual-click restart with evidence.",
+      "workToDone": true,
+      "assignee": "daniels-MacBook-Pro-2/airbnb:eng-1",
+      "state": "done",
+      "verified": true,
+      "lastStatus": "DONE \u2014 manual Gather live proven with CEO, manual-only intact, procedure documented & verified on sayno.",
+      "proofs": [],
+      "subs": [],
+      "pingsToBoss": 2,
+      "assignedAt": 1780923415649,
+      "lastStopTs": null,
+      "created": 1780923192110,
+      "updated": 1780924326911
+    },
+    "f180de28e548": {
+      "id": "f180de28e548",
+      "text": "Melhorar o mypeople + TODO integra\u00e7\u00e3o work to done needs to really go to DONE and keep nudging the BOSS while the thing is not done; otherwise it WON'T",
+      "doneCondition": "",
+      "brainstorm": "",
+      "workToDone": false,
+      "assignee": "daniels-MacBook-Pro-2/todo:eng-1",
+      "state": "done",
+      "verified": true,
+      "lastStatus": "DONE \u2014 nudge gated on real BUSY state (peek busy-marker); no more crying wolf on deep-thinking agents, real stalls still caught. Reversion condition: reopen if a busy agent gets false-nudged.",
+      "proofs": [
+        {
+          "id": "02cf7ad9707c",
+          "type": "text",
+          "ref": "Watchdog false-alarm ROOT FIX shipped: nudge now gated on ACTUAL state via the mp-peek ground-truth busy marker (\"esc to interrupt\" in the live tmux pane) BEFORE any elapsed-time logic. agent_pane_busy() added; checked FIRST in assignee_idle_secs -> a turn running now = BUSY = never nudged. VERIFIED end-to-end (2 tmux-backed agents, identical stale status, differ only by pane marker): busy mid-turn agent = 0 watchdog pings, idle-at-prompt agent past threshold = nudged (4 pings). 3-min threshold kept. Folded into todo.seed.md (R14) + watchdog doc updated. Live on :9933 (launchd-managed).",
+          "caption": "",
+          "by": "todo:eng-1",
+          "ts": 1780940905530
+        }
+      ],
+      "subs": [],
+      "pingsToBoss": 0,
+      "assignedAt": 1780935129664,
+      "lastStopTs": null,
+      "created": 1780926784843,
+      "updated": 1780941005496
+    },
+    "aa0f2a73d208": {
+      "id": "aa0f2a73d208",
+      "text": "Fluxo de SEEDBED + SEEDREC + SEEDHARDEN funcionando 100% automaticamente validado",
+      "doneCondition": "",
+      "brainstorm": "",
+      "workToDone": false,
+      "assignee": "daniels-MacBook-Pro-2/server:eng-1",
+      "state": "done",
+      "verified": true,
+      "lastStatus": "DONE \u2014 100%-automatic seedbed flow proven 3/3 via codex-driven auth (no human), Boss-verified all gates.",
+      "proofs": [
+        {
+          "id": "884be09f4a97",
+          "type": "text",
+          "ref": "Boss-verified (own eyes), auth gap CLOSED: codex:eng-1 drove all 3 device-logins end-to-end (navigate->click Authorize->copy code via CDP 9231), ZERO human in the auth loop. Per-node: auth (all 3 \"Login method: Claude Max\" \u2014 seedbed-auto-1/2/3 worker-1 joined the Boss, confirmed in mp status; cannot join unauthed); recording (Mac-side capture, REAL content \u2014 viewed auto-1-frame.png: live worker pane, Claude Code / Welcome back Daniel / Claude Max, not blank); tkmx 200; attach :7690/7692/7694 tested. Full flow fresh container -> codex-driven auth -> join -> seedrec records -> build/harden runs automatically, proven 3/3.",
+          "caption": "",
+          "by": "Boss",
+          "ts": 1780943134160
+        }
+      ],
+      "subs": [],
+      "pingsToBoss": 0,
+      "assignedAt": 1780935129650,
+      "lastStopTs": null,
+      "created": 1780930665029,
+      "updated": 1780943134165
+    },
+    "a1358bbf59a9": {
+      "id": "a1358bbf59a9",
+      "text": "mypeople working with codex",
+      "doneCondition": "mypeople support and can control both claude and codex sessions",
+      "brainstorm": "",
+      "workToDone": true,
+      "assignee": "daniels-MacBook-Pro-2/mypeople:eng-1",
+      "state": "done",
+      "verified": true,
+      "lastStatus": "DONE \u2014 codex genuinely integrated as a 2nd backend, process-verified + all gates pass + seeded. (Codex-for-AUTH is definitively dropped: a GENUINE codex refuses the device-login auth, same as Claude \u2014 real model convergence.)",
+      "proofs": [
+        {
+          "id": "3744c2951838",
+          "type": "text",
+          "ref": "codexverify PASS: --backend codex agent spawned; turn-end notify via shim received by Boss; peek BUSY/IDLE correct; accepted + ran an `mp send`. Codex proven as a 2nd mypeople backend (notify+send). Auth-via-codex sub-idea dropped: codex ALSO refuses to approve OAuth device-logins/relay codes (same as Claude) \u2014 a real finding (both models converge), not an integration failure.",
+          "caption": "",
+          "by": "Boss",
+          "ts": 1780936878914
+        },
+        {
+          "id": "d2eb32f5af45",
+          "type": "text",
+          "ref": "REAL evidence (Boss ps-verified on fresh spawns): mp spawn --backend codex now launches a GENUINE codex process \u2014 \"node .../bin/codex --notify=...codex-notify\", NOT claude. All backend gates pass on genuine codex: send (replied PONG), peek (BUSY/IDLE correct), notify->Boss (hook log agent-turn-complete backend:codex). Boss chatted with the codex session live. Root cause of the earlier bogus pass: stale daemon holding old bytecode + silent relabel on idempotent re-spawn (\"the running process is the proof, a label is a false green\"). Fix folded into mypeople.seed.md + a Failure-modes entry. Codex-for-AUTH definitively dropped: a genuine codex refuses device-login auth too (real model convergence).",
+          "caption": "",
+          "by": "Boss",
+          "ts": 1780938172990
+        }
+      ],
+      "subs": [],
+      "pingsToBoss": 8,
+      "assignedAt": 1780937335917,
+      "lastStopTs": null,
+      "created": 1780933669206,
+      "updated": 1780938172993,
+      "stallPingTs": 0
+    },
+    "4cb6e7ad0da6": {
+      "id": "4cb6e7ad0da6",
+      "text": "The 3 seedbeds have tokenmaxxing in it",
+      "doneCondition": "The 3 seedbeds have tokenmaxxing in it ",
+      "brainstorm": "",
+      "workToDone": true,
+      "assignee": "daniels-MacBook-Pro-2/server:eng-1",
+      "state": "done",
+      "verified": true,
+      "lastStatus": "DONE \u2014 tkmx reporting 200 rows:1 on all 3 seedbeds, verified.",
+      "proofs": [
+        {
+          "id": "5b86739002fa",
+          "type": "text",
+          "ref": "Boss-verified (Rule 17.3): tkmx reporting on all 3 \u2014 tp-1/tp-2/tp-3 each \"Server responded 200 {ok:true,rows:1}\", client_id=mp-seedbed-tp-N, reporter daemon alive (tp-3 transient 429 recovered). Actual reporting confirmed, not a build gate.",
+          "caption": "",
+          "by": "Boss",
+          "ts": 1780934784196
+        }
+      ],
+      "subs": [],
+      "pingsToBoss": 2,
+      "assignedAt": 1780934105506,
+      "lastStopTs": null,
+      "created": 1780934069624,
+      "updated": 1780934784200
     }
   }
 }

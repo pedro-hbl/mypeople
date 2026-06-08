@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Plow — Priorities (TODO v2)</title>
+<title>Plow — Priorities (TODO)</title>
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500;700&family=DM+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet">
 <style>
 :root{
@@ -37,6 +37,17 @@ h1 em{font-style:italic;color:rgba(240,240,232,.55)}
 .addbar input:focus{border-color:var(--grove);box-shadow:0 0 0 3px rgba(94,122,94,.25)}
 .btn-volt{font-family:var(--sans);font-weight:700;font-size:17px;color:var(--midnight);background:var(--volt);border:none;border-radius:14px;padding:0 32px;cursor:pointer;white-space:nowrap}
 .btn-volt:hover{filter:brightness(1.06);box-shadow:0 4px 20px var(--volt-glow)}
+.cnt-hidden{color:var(--iris)!important;border-color:rgba(196,191,255,.35)!important}
+.viewbar{display:flex;align-items:center;justify-content:space-between;gap:18px 28px;flex-wrap:wrap;margin:18px 0 4px;padding:14px 0;border-top:1px solid var(--dark-border);border-bottom:1px solid var(--dark-border)}
+.vb-group{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.vb-label{font-family:var(--mono);font-size:10px;letter-spacing:.13em;text-transform:uppercase;color:var(--muted-dark);margin-right:3px}
+.chip{font-family:var(--mono);font-weight:500;font-size:11px;letter-spacing:.04em;border-radius:100px;padding:4px 11px;text-transform:uppercase;cursor:pointer;border:1px solid transparent;user-select:none;transition:filter .15s,opacity .15s}
+.chip:hover{filter:brightness(1.12)}
+.chip.off{background:transparent!important;color:var(--muted-dark)!important;border-color:var(--dark-border)!important;text-decoration:line-through;opacity:.55}
+.vb-sep{width:1px;height:22px;background:var(--dark-border);margin:0 3px}
+.vbtn{font-family:var(--mono);font-size:11px;letter-spacing:.04em;color:var(--muted-dark);background:var(--surface);border:1px solid var(--dark-border);border-radius:9px;padding:5px 12px;cursor:pointer;text-transform:uppercase;transition:.15s}
+.vbtn:hover{border-color:var(--volt);color:var(--volt)}
+.vbtn.on{background:var(--volt-dim);border-color:var(--volt);color:var(--volt)}
 ul{list-style:none}
 .task{background:var(--surface);border:1px solid var(--dark-border);border-radius:18px;padding:20px 22px;margin-top:14px}
 .task.fresh{animation:fadeUp .2s ease-out}
@@ -54,10 +65,8 @@ ul{list-style:none}
 .meta{display:flex;align-items:center;gap:8px;margin-top:8px;flex-wrap:wrap}
 .badge{font-family:var(--mono);font-weight:500;font-size:11px;letter-spacing:.04em;border-radius:100px;padding:3px 10px;text-transform:uppercase}
 .st-needs_brainstorm{background:rgba(196,191,255,.18);color:var(--iris)}
-.st-ready{background:rgba(90,200,250,.16);color:var(--info)}
-.st-dispatched,.st-working{background:rgba(254,188,46,.18);color:var(--warning)}
+.st-working{background:rgba(254,188,46,.18);color:var(--warning)}
 .st-blocked{background:rgba(255,59,48,.16);color:var(--danger)}
-.st-awaiting_verify{background:rgba(254,188,46,.14);color:var(--warning)}
 .st-done{background:rgba(52,199,89,.16);color:#52d873}
 .tag{font-family:var(--mono);font-size:11px;color:var(--muted-dark);border:1px solid var(--dark-border);border-radius:100px;padding:3px 10px}
 .row{display:flex;align-items:center;gap:10px;margin-top:12px;flex-wrap:wrap}
@@ -94,7 +103,7 @@ ul{list-style:none}
     <div>
       <div class="brand">
         <div class="mark"><span>P</span></div>
-        <div><h1>Priorities <em>— v2</em></h1><div class="subt">Boss source-of-truth · MyPeople</div></div>
+        <div><h1>Priorities</h1><div class="subt">Boss source-of-truth · MyPeople</div></div>
       </div>
       <div class="counts" id="counts"></div>
     </div>
@@ -106,6 +115,22 @@ ul{list-style:none}
   <div class="addbar">
     <input id="newItem" type="text" placeholder="Add a priority and hit Enter…" autocomplete="off">
     <button class="btn-volt" id="addBtn">Add</button>
+  </div>
+  <div class="viewbar">
+    <div class="vb-group">
+      <span class="vb-label">show</span>
+      <span id="showChips" style="display:contents"></span>
+      <span class="vb-sep"></span>
+      <button class="vbtn" data-preset="all">all</button>
+      <button class="vbtn" data-preset="hide-done">hide done</button>
+      <button class="vbtn" data-preset="only-done">only done</button>
+    </div>
+    <div class="vb-group" id="sortSeg">
+      <span class="vb-label">sort by status</span>
+      <button class="vbtn" data-sort="none">manual</button>
+      <button class="vbtn" data-sort="asc" title="open work first, done at bottom">open → done ↓</button>
+      <button class="vbtn" data-sort="desc" title="done first, open at bottom">done → open ↑</button>
+    </div>
   </div>
   <ul id="list"></ul>
 </div>
@@ -119,8 +144,56 @@ const els={};                         // task id -> <li> (with li._r cached chil
 const H=()=>({'Content-Type':'application/json',...(SECRET?{'X-Queue-Secret':SECRET}:{})});
 async function api(path,body){const r=await fetch(path,{method:'POST',headers:H(),body:JSON.stringify(body)});return r.json();}
 const upd=b=>api('/todo/update',b), statusApi=b=>api('/todo/status',b), brainstormApi=b=>api('/todo/brainstorm',b), proofApi=b=>api('/todo/proof',b);
-const STLABEL={needs_brainstorm:'needs brainstorm',ready:'ready',dispatched:'dispatched',working:'working',blocked:'blocked',awaiting_verify:'awaiting verify',done:'done'};
+const STLABEL={needs_brainstorm:'needs brainstorm',working:'working',blocked:'blocked',done:'done'};
 function esc(s){return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+
+// ── VIEW LAYER: filter + sort by status (client-only; NEVER mutates board.order) ──
+// Pure presentation. The durable store, manual order, cron & watchdog are untouched —
+// this only decides which cards show and in what visual order. Persisted in localStorage.
+const STATES=['needs_brainstorm','working','blocked','done'];
+const STRANK=Object.fromEntries(STATES.map((s,i)=>[s,i]));
+let view={hidden:new Set(),sort:'none'};   // hidden: states to hide; sort: 'none'|'asc'|'desc'
+try{ const v=JSON.parse(localStorage.getItem('todoView')||'{}');
+     if(Array.isArray(v.hidden)) view.hidden=new Set(v.hidden.filter(s=>STATES.includes(s)));
+     if(['none','asc','desc'].includes(v.sort)) view.sort=v.sort; }catch(e){}
+function saveView(){ try{localStorage.setItem('todoView',JSON.stringify({hidden:[...view.hidden],sort:view.sort}));}catch(e){} }
+
+// apply current filter+sort to an ordered id list -> visible ids in display order.
+// Sort is stable within a status: ties keep the CEO's manual board order.
+function applyView(ids){
+  let v=ids.filter(id=>!view.hidden.has(board.tasks[id].state));
+  if(view.sort!=='none'){
+    const dir=view.sort==='asc'?1:-1;
+    v=v.map((id,i)=>[id,i]).sort((a,b)=>{
+      const ra=STRANK[board.tasks[a[0]].state]??99, rb=STRANK[board.tasks[b[0]].state]??99;
+      return ra!==rb ? (ra-rb)*dir : a[1]-b[1];
+    }).map(x=>x[0]);
+  }
+  return v;
+}
+
+// build the per-status toggle chips once, wire up all view controls
+function initViewbar(){
+  const wrap=document.getElementById('showChips');
+  wrap.innerHTML=STATES.map(s=>`<span class="chip st-${s}" data-st="${s}">${esc(STLABEL[s]||s)}</span>`).join('');
+  wrap.querySelectorAll('.chip').forEach(c=>{
+    c.onclick=()=>{ const s=c.dataset.st; view.hidden.has(s)?view.hidden.delete(s):view.hidden.add(s); saveView(); renderViewbar(); reconcile(); };
+  });
+  document.querySelectorAll('.viewbar [data-preset]').forEach(b=>{
+    b.onclick=()=>{ const p=b.dataset.preset;
+      if(p==='all') view.hidden=new Set();
+      else if(p==='hide-done') view.hidden=new Set(['done']);
+      else if(p==='only-done') view.hidden=new Set(STATES.filter(s=>s!=='done'));
+      saveView(); renderViewbar(); reconcile(); };
+  });
+  document.querySelectorAll('#sortSeg [data-sort]').forEach(b=>{
+    b.onclick=()=>{ view.sort=b.dataset.sort; saveView(); renderViewbar(); reconcile(); };
+  });
+}
+function renderViewbar(){
+  document.querySelectorAll('#showChips .chip').forEach(c=>c.classList.toggle('off', view.hidden.has(c.dataset.st)));
+  document.querySelectorAll('#sortSeg [data-sort]').forEach(b=>b.classList.toggle('on', b.dataset.sort===view.sort));
+}
 
 // ── DIRTY FIELDS ARE SACRED ───────────────────────────────────────────────
 // A field is sacred if it's focused OR has unsaved local edits (data-dirty=1).
@@ -142,19 +215,33 @@ async function pull(){
 }
 
 function reconcile(){
-  const ids=board.order.filter(id=>board.tasks[id]);
+  const ids=board.order.filter(id=>board.tasks[id]);        // every real card, in manual order
   let done=0; ids.forEach(id=>{if(board.tasks[id].state==='done')done++;});
-  document.getElementById('counts').innerHTML=`<span>${done} done</span><span>${ids.length-done} open</span><span>${ids.length} total</span>`;
+  const viewIds=applyView(ids);                             // filtered + sorted view (client-only)
+  const hidden=ids.length-viewIds.length;
+  document.getElementById('counts').innerHTML=
+    `<span>${done} done</span><span>${ids.length-done} open</span><span>${ids.length} total</span>`+
+    (hidden?`<span class="cnt-hidden">${hidden} hidden</span>`:'');
+  renderViewbar();
   if(!ids.length){ if(!listEl.querySelector('.empty')) listEl.innerHTML='<li class="empty">Nada ainda. Adiciona a primeira prioridade acima.</li>'; for(const k in els) delete els[k]; return; }
-  const emptyEl=listEl.querySelector('.empty'); if(emptyEl) emptyEl.remove();
+  const baseEmpty=listEl.querySelector('.empty:not(.filtered)'); if(baseEmpty) baseEmpty.remove();
   const sy=window.scrollY, active=document.activeElement;
-  // create + update in place
+  // create + update in place (every card is kept synced, even if filtered out)
   ids.forEach(id=>{ let li=els[id]; if(!li){ li=createTask(id); els[id]=li; listEl.appendChild(li); li.classList.add('fresh'); } syncTask(li, board.tasks[id]); });
   // remove gone
-  for(const id in els){ if(!ids.includes(id)){ els[id].remove(); delete els[id]; } }
-  // reorder DOM only if the order actually changed
+  for(const id in els){ if(!board.tasks[id]){ els[id].remove(); delete els[id]; } }
+  // filter: show only cards in the view; hidden cards stay in the DOM but display:none
+  const visible=new Set(viewIds);
+  ids.forEach(id=>{ els[id].style.display = visible.has(id)?'':'none'; });
+  // "nothing matches" message when the filter hides everything
+  let fe=listEl.querySelector('.empty.filtered');
+  if(!viewIds.length){ if(!fe){ fe=document.createElement('li'); fe.className='empty filtered'; fe.textContent='No cards match this filter.'; listEl.appendChild(fe); } }
+  else if(fe){ fe.remove(); fe=null; }
+  // reorder DOM only if it actually changed: visible (sorted) first, then hidden cards
+  const target=[...viewIds, ...ids.filter(id=>!visible.has(id))];
   const cur=[...listEl.children].map(n=>n.dataset.id).filter(Boolean);
-  if(cur.join(',')!==ids.join(',')) ids.forEach(id=>listEl.appendChild(els[id]));
+  if(cur.join(',')!==target.join(',')) target.forEach(id=>listEl.appendChild(els[id]));
+  if(fe) listEl.appendChild(fe);                            // keep the filter-empty notice last
   // preserve focus + scroll across the tick
   if(active && document.contains(active) && document.activeElement!==active){ try{active.focus({preventScroll:true});}catch(e){} }
   if(window.scrollY!==sy) window.scrollTo(0,sy);
@@ -192,7 +279,7 @@ function createTask(id){
   r.text.onkeydown=e=>{ if(e.key==='Enter'){e.preventDefault(); r.text.blur();} };
   // check toggle done/undone
   r.check.onclick=()=>{ const t=T(); if(!t||!(t.doneCondition||'').trim())return;
-    if(t.state==='done') statusApi({id,state:'ready',verified:false}).then(pull);
+    if(t.state==='done') statusApi({id,state:'working',verified:false}).then(pull);
     else if(t.verified) statusApi({id,state:'done'}).then(pull);
     else alert('Not verified yet — a task is done only when its condition is verified with proof.'); };
   // done-condition
@@ -262,6 +349,7 @@ input.addEventListener('keydown',e=>{ if(e.key==='Enter') add(); });
 
 function clock(){ const d=new Date(); document.getElementById('clock').textContent=d.toLocaleTimeString(); }
 setInterval(clock,1000); clock();
+initViewbar(); renderViewbar();   // build + restore the filter/sort controls before first paint
 setInterval(pull,1000); pull();   // 1s live poll, incremental — no reload, dirty fields preserved
 input.focus();
 </script>

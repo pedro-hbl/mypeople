@@ -8,6 +8,8 @@
 
 Install the mypeople runtime on this host with claude already installed: a small HTTP queue (queue-server), a heartbeat/dispatch client (queue-client), a CLI (`mp`) for `spawn / send / peek / kill / status`, a per-spawn Claude Code hooks plugin so agents emit lifecycle events, a Boss role that internalizes a doctrine on spawn, a HUD + per-tab browser-attach (ttyd), and a Tailscale tailnet join so the HUD + ttyd are reachable from anywhere on the tailnet via a stable hostname.
 
+The agent backend is pluggable: `--backend claude` (default) and `--backend codex` (OpenAI Codex CLI) share the same queue, tmux, notification pipeline, and `mp` verbs. The queue-client carries a per-backend TUI-marker table so spawn/peek/send work for either; Codex turn-end is bridged to the same Stop-hook contract via the `codex-notify` hook. Codex support is install-complete out of the box, but a working `--backend codex` agent additionally requires the `codex` CLI to be installed AND logged in on this host (see Step 7.6).
+
 After install: `http://<TS_HOSTNAME>.<tailnet>.ts.net:9900/dashboard` (HUD) and `http://<TS_HOSTNAME>.<tailnet>.ts.net:7681/?arg=-t&arg=mc-main:Boss` (ttyd attach) Just Work from any tailnet node.
 
 The seed describes **intent**; the agent reading it adapts to whatever OS / package manager / privilege model the host has. macOS, Debian, Ubuntu, RHEL — pick the right install incantation for each component named in `## Components`. If you're inside a sandboxed Linux container without TUN, that's a sandbox issue you resolve outside the seed (e.g. `--cap-add NET_ADMIN --device /dev/net/tun`).
@@ -16,7 +18,9 @@ The seed describes **intent**; the agent reading it adapts to whatever OS / pack
 
 Each independently verifiable from a fresh shell.
 
-**Runtime:**
+**JOIN-mode done** (when `UPSTREAM_QUEUE_URL` is set): the node runs a `queue-client` (+ `ttyd`) but NO local `queue-server` / Boss / tailnet identity; it appears in the UPSTREAM's `/clients` (and `mp status`) as a heartbeating client under `HOST_ID`; and a task submitted upstream targeting `HOST_ID/...` round-trips to this node's client. The self-contained criteria below apply only when `UPSTREAM_QUEUE_URL` is unset.
+
+**Runtime (self-contained):**
 - `curl http://127.0.0.1:9900/health` returns 200 with `{"status": "ok"}`.
 - `queue-server` and `queue-client` processes both alive in `ps`.
 - `ttyd` running with `tmux attach` so per-tab attach URLs work.
@@ -42,28 +46,39 @@ Each independently verifiable from a fresh shell.
 |---|---|---|---|---|
 | `QUEUE_PORT` | no | `9900` | port free or our own server | "TCP port (default 9900)" |
 | `QUEUE_SECRET` | no | (auto) | existing key in `queue.env` | "Reuse or auto-gen" |
+| `UPSTREAM_QUEUE_URL` | no | (empty ⇒ self-contained) | env / `queue.env` | "JOIN-mode switch. URL of an EXISTING upstream queue-server to register with, e.g. `http://mac-pro.<tailnet>.ts.net:9900`. When SET, this host installs as a JOIN node: it runs ONLY a queue-client (+ttyd) pointed at the upstream — no local queue-server, no local Boss, no own tailnet identity. When EMPTY (default), this host is a self-contained central node (original behavior)." |
+| `UPSTREAM_QUEUE_SECRET` | cond. | none | env / `queue.env` | "JOIN-mode only, then REQUIRED: the upstream queue-server's `QUEUE_SECRET` — the join node MUST present the SAME secret or every request is 401. Handle securely — never echo or log it. If unset in JOIN-mode: `BLOCKED_REASON=upstream_secret_not_set`." |
 | `QUEUE_DEAD_AFTER` | no | `4 × QUEUE_HEARTBEAT` (120s) | env | (no prompt — secs a host can be silent before its agents are reaped from the HUD; 4 missed heartbeats is generous so a loaded host isn't false-reaped) |
 | `INSTALL_DIR` | no | `$HOME/mypeople` | dir exists | default |
-| `HOST_ID` | no | `$(hostname -s)` | `hostname -s` works | default |
+| `HOST_ID` | no | `$(hostname -s)` | `hostname -s` works | "Stable host id used in every agent address (`<HOST_ID>/<sess>:<tab>`) and as the heartbeating-client name upstream. Use a durable name with NO transient/state words (e.g. `server`, not `server-temp`). Default: `hostname -s`." |
 | OS deps (`tmux python3 jq procps`) | yes | apt | `command -v` each | (no prompt — agent runs apt install non-interactively) |
 | claude CLI | yes | present | `command -v claude` | `BLOCKED_REASON=claude_not_installed` |
-| `TS_AUTHKEY` | **yes** | none | `[ -n "$TS_AUTHKEY" ]` (env or queue.env) | "Tailscale auth key — generate at https://login.tailscale.com/admin/settings/keys (reusable, ephemeral OFF, tag is fine). The seed cannot proceed without one." |
+| `TS_AUTHKEY` | cond. | none | `[ -n "$TS_AUTHKEY" ]` (env or queue.env) | "Tailscale auth key — generate at https://login.tailscale.com/admin/settings/keys (reusable, ephemeral OFF, tag is fine). REQUIRED in self-contained mode (the seed cannot proceed without one). In JOIN-mode it's needed ONLY if this host can't already reach `UPSTREAM_QUEUE_URL` — if `curl $UPSTREAM_QUEUE_URL/health` already returns 200 (host already on the tailnet/LAN), the tailnet-join is skipped and no authkey is required." |
 | `TS_HOSTNAME` | no | `mypeople-$(hostname -s)` | always available | "Stable hostname to announce on the tailnet. Default: `mypeople-<short hostname>`. Reachable as `<hostname>.<tailnet>.ts.net`." |
-| TUN device (Linux only) | conditional | host-provided | `[ -c /dev/net/tun ]` on Linux | If missing on Linux: `BLOCKED_REASON=no_tun_device` — Tailscale needs a kernel TUN device. Sandboxed containers must be started with `--device /dev/net/tun --cap-add NET_ADMIN`. On macOS Tailscale uses the system extension instead; this input is N/A. |
+| TUN device (Linux only) | conditional | host-provided | `[ -c /dev/net/tun ]` on Linux | If missing on Linux *and Tailscale is being brought up here*: `BLOCKED_REASON=no_tun_device` — Tailscale needs a kernel TUN device. Sandboxed containers must be started with `--device /dev/net/tun --cap-add NET_ADMIN`. On macOS Tailscale uses the system extension instead; this input is N/A. JOIN-mode exception: if `UPSTREAM_QUEUE_URL` is already reachable, Tailscale is not started here, so the TUN check is N/A — skip it. |
 
 ## Components
 
 | Component | Source | Notes |
 |---|---|---|
 | `queue-server.py` | inline | HTTP queue: clients, agents, task submit/poll/result, dashboard; heartbeat reaper auto-prunes agents on hosts that stop heartbeating |
-| `queue-client.py` | inline | heartbeat + task dispatcher; tmux input via bracketed-paste |
+| `queue-client.py` | inline | heartbeat + task dispatcher; tmux input via bracketed-paste; per-backend marker table drives spawn/peek/send for BOTH `claude` and `codex` (unknown backend falls back to claude) |
 | `mp` CLI | inline | `spawn / send / peek / kill / status / answer` (peek classifies BUSY/IDLE; answer submits an AskUserQuestion form) |
-| `plugins/tmux-boss-hooks/` | inline | Claude Code hooks plugin: SessionStart / Stop / SessionEnd → status file + boss notification; PreToolUse/AskUserQuestion → `[AGENT QUESTION]` to boss |
+| `plugins/tmux-boss-hooks/` | inline | lifecycle hooks. Claude: `emit-event` on SessionStart / Stop / SessionEnd → status file + boss notification; PreToolUse/AskUserQuestion → `[AGENT QUESTION]`. Codex: `codex-notify` on `agent-turn-complete` → the SAME Stop-hook contract (status file + boss notification) |
 | `boss-CLAUDE.md` | inline | doctrine read by every Boss at spawn |
 | `dashboard.html` | inline | HUD page, served from queue-server, polls /agents + /clients |
 | OS pkgs | apt: `tmux python3 jq procps ttyd tailscale` (with ttyd binary fallback) | |
 
 ## Steps
+
+### Install mode: self-contained (default) vs JOIN
+
+This seed installs in one of two modes, decided solely by whether `UPSTREAM_QUEUE_URL` is set. Convention used throughout the Steps: **`MODE=join` iff `[ -n "$UPSTREAM_QUEUE_URL" ]`**, else `MODE=self`.
+
+- **self-contained** (`UPSTREAM_QUEUE_URL` empty — default): this host is a central node — local queue-server + queue-client + ttyd + its own tailnet identity + a Boss. Original behavior; unchanged.
+- **JOIN** (`UPSTREAM_QUEUE_URL` set): this host is a worker node that registers with an EXISTING upstream queue-server (e.g. a laptop running self-contained). It runs ONLY queue-client + ttyd, pointed at `UPSTREAM_QUEUE_URL` using `UPSTREAM_QUEUE_SECRET`. It does **NOT** start a local queue-server, does **NOT** create a local Boss, and does **NOT** claim its own tailnet identity (it only needs to *reach* the upstream). This is what satisfies capability §12 (cross-host routing): from the upstream, `mp spawn <this-host>/<sess>:<tab> --boss <upstream-host>/main:Boss` lands a tmux window HERE and routes this agent's Stop notifications back to that Boss.
+
+A step tagged **[self-contained only]** is SKIPPED in JOIN-mode; a branch tagged **[JOIN]** runs only in JOIN-mode. (Rule 13 still holds in JOIN-mode: any Claude agents spawned on this node get their OWN fresh device-login — no token/auth volume is copied. The queue-client itself needs no Claude auth.)
 
 ### 0. Interview (mandatory)
 
@@ -86,7 +101,7 @@ Detect what's missing with `command -v <name>`; install only what's absent. Sugg
 
 Stop with `BLOCKED_REASON=<tool>_install_failed` if any of `tmux jq ttyd tailscale` is unreachable after install.
 
-On **Linux only**, also verify `[ -c /dev/net/tun ]`. If missing, you're in a sandboxed container without the right permissions — stop with `BLOCKED_REASON=no_tun_device` (caller fixes by re-creating the container with `--device /dev/net/tun --cap-add NET_ADMIN`). On macOS the TUN check is N/A.
+On **Linux only**, also verify `[ -c /dev/net/tun ]`. If missing, you're in a sandboxed container without the right permissions — stop with `BLOCKED_REASON=no_tun_device` (caller fixes by re-creating the container with `--device /dev/net/tun --cap-add NET_ADMIN`). On macOS the TUN check is N/A. **JOIN-mode exception**: if `UPSTREAM_QUEUE_URL` is already reachable (`curl -fsS "$UPSTREAM_QUEUE_URL/health"` returns 200), this node will NOT bring up Tailscale, so the TUN check is N/A — skip it.
 
 ### 2. Stop any prior mypeople daemons (idempotent reinstall)
 
@@ -261,9 +276,15 @@ chmod 644 "$HOME/.tmux.conf"
 tmux source-file "$HOME/.tmux.conf" 2>/dev/null || true
 ```
 
-### 4. Write `queue-server.py`
+### 4. Write `queue-server.py` [self-contained only]
+
+In JOIN-mode this Step is skipped — the node registers with the upstream queue-server instead of running its own.
 
 ```bash
+# [self-contained only] — JOIN nodes use the upstream's queue-server, not a local one.
+if [ -n "${UPSTREAM_QUEUE_URL:-}" ]; then
+  echo "[JOIN] skipping local queue-server (will use upstream $UPSTREAM_QUEUE_URL)"
+else
 cat > "$INSTALL_DIR/bin/queue-server.py" <<'PY_EOF'
 #!/usr/bin/env python3
 """mypeople queue-server."""
@@ -284,12 +305,18 @@ HEARTBEAT = int(os.environ.get("QUEUE_HEARTBEAT", "30"))
 # times out on a dead host. Tune via QUEUE_DEAD_AFTER / QUEUE_REAP_INTERVAL.
 DEAD_AFTER = float(os.environ.get("QUEUE_DEAD_AFTER", str(HEARTBEAT * 4)))
 REAP_INTERVAL = float(os.environ.get("QUEUE_REAP_INTERVAL", str(max(5, HEARTBEAT // 2))))
+# Idempotency dedup window. A submit carrying an idempotency_key we've already
+# seen within this many seconds is collapsed onto the original task instead of
+# enqueuing a duplicate — exactly-once notification delivery even if a Stop hook
+# double-fires or a submit is retried. Tune via QUEUE_DEDUP_WINDOW.
+DEDUP_WINDOW = float(os.environ.get("QUEUE_DEDUP_WINDOW", "45"))
 START_TS = time.time()
 
 _lock = threading.Lock()
 clients = {}
 agents = {}
 tasks = {}
+idem_seen = {}   # idempotency_key -> (task_id, ts), pruned on submit
 
 
 def _host_of(agent_id):
@@ -495,7 +522,23 @@ class Handler(http.server.BaseHTTPRequestHandler):
             }
             if not t["target_host"]:
                 return self._json(400, {"error": "target_host or target_agent required"})
+            ikey = (data.get("idempotency_key") or "").strip()
             with _lock:
+                now = time.time()
+                if ikey:
+                    # Prune expired keys, then collapse a duplicate onto the
+                    # original task so a re-fired/retried notification is never
+                    # enqueued (and thus never delivered) twice.
+                    for k in [k for k, (_, ts) in idem_seen.items()
+                              if now - ts > DEDUP_WINDOW]:
+                        idem_seen.pop(k, None)
+                    prev = idem_seen.get(ikey)
+                    if prev and now - prev[1] <= DEDUP_WINDOW:
+                        sys.stderr.write(
+                            f"{time.strftime('%H:%M:%S')} dedup: dropped duplicate "
+                            f"submit key={ikey[:12]} -> task {prev[0][:8]}\n")
+                        return self._json(200, {"task_id": prev[0], "deduped": True})
+                    idem_seen[ikey] = (tid, now)
                 tasks[tid] = t
             return self._json(200, {"task_id": tid})
 
@@ -532,6 +575,7 @@ if __name__ == "__main__":
     server.serve_forever()
 PY_EOF
 chmod +x "$INSTALL_DIR/bin/queue-server.py"
+fi
 ```
 
 ### 5. Write `queue-client.py`
@@ -563,6 +607,54 @@ _agents_lock = threading.Lock()
 
 PASTE_START = "\x1b[200~"
 PASTE_END = "\x1b[201~"
+
+# Per-backend TUI marker table. The tmux send/peek mechanism is backend-generic
+# (bracketed paste + Enter); only the on-screen chrome it keys off differs.
+# Markers captured live from each TUI (Codex strings from codex-cli 0.132.0):
+#   - "ready":  substring present once the agent's TUI is up and accepting input
+#               (Claude startup banner/footer; Codex startup box ">_ OpenAI Codex").
+#   - "busy":   substring shown ONLY while a turn is actively running.
+#               Both TUIs print "esc to interrupt"; Codex wraps it as
+#               "* Working (Ns * esc to interrupt)".
+#   - "prompt": the composer prompt glyph. Claude is U+276F; Codex is U+203A
+#               — DIFFERENT glyphs.
+#   - "idle":   substrings proving an idle composer is present (prompt glyph, or
+#               a stable footer token). Claude "bypass permissions on"; Codex
+#               footer "<model> SEP <cwd>" where SEP is U+00B7 surrounded by spaces.
+#   - "region_end": line substring bounding the BOTTOM of the composer region for
+#               paste-draft detection (the footer just under the composer).
+#   - "paste":  lowercased paste-draft tag a stuck multiline draft collapses to.
+MARKERS = {
+    "claude": {
+        "ready": "bypass permissions on",
+        "busy": "esc to interrupt",
+        "prompt": "❯",
+        "idle": ("❯", "bypass permissions on"),
+        "region_end": "bypass permissions on",
+        "paste": "[pasted text",
+    },
+    "codex": {
+        "ready": "OpenAI Codex",            # startup box: ">_ OpenAI Codex (vX)"
+        "busy": "esc to interrupt",         # "* Working (Ns * esc to interrupt)"
+        "prompt": "›",
+        "idle": ("›", " · "),     # prompt glyph, or "<model> · <cwd>" footer
+        "region_end": " · ",           # footer "<model> · <cwd>"
+        "paste": "[pasted text",
+    },
+}
+DEFAULT_BACKEND = "claude"
+
+
+def markers_for(backend):
+    return MARKERS.get(backend or DEFAULT_BACKEND, MARKERS[DEFAULT_BACKEND])
+
+
+def _agent_backend(aid):
+    """Backend for an agent id from this client's durable record (agents.json).
+    Falls back to 'claude' so existing/unknown agents behave exactly as before."""
+    with _agents_lock:
+        meta = _load_agents().get(aid) or {}
+    return meta.get("backend") or DEFAULT_BACKEND
 
 
 def post_json(path, data):
@@ -600,6 +692,44 @@ def heartbeat_loop():
 
 def tmux_run(*args, timeout=5):
     return subprocess.run(["tmux", *args], capture_output=True, text=True, timeout=timeout)
+
+
+def _pane_backend(target):
+    """Best-effort: which backend binary is ACTUALLY RUNNING in this pane?
+
+    Returns 'claude', 'codex', or None (bare shell / can't classify). After the
+    spawn's `exec <backend>`, tmux's #{pane_pid} IS the backend process, so its
+    command line is ground truth; we also scan its direct children (codex's node
+    launcher re-execs a vendored `codex` binary as a child). This is what lets
+    the idempotent re-spawn path REFUSE to relabel a pane as a backend it isn't
+    running — the 'registry says codex but the process is claude' bug: a
+    --backend codex spawn onto a window already holding a claude pane used to
+    take the reuse short-circuit, flip the registry label to codex, and return
+    success while claude kept running. Verify by the process, never the label."""
+    r = tmux_run("display-message", "-t", target, "-p", "#{pane_pid}")
+    if r.returncode != 0 or not r.stdout.strip():
+        return None
+    pid = r.stdout.strip()
+    try:
+        cmds = subprocess.run(["ps", "-o", "command=", "-p", pid],
+                              capture_output=True, text=True, timeout=5).stdout
+        kids = subprocess.run(["pgrep", "-P", pid],
+                              capture_output=True, text=True, timeout=5).stdout.split()
+        for k in kids:
+            cmds += "\n" + subprocess.run(["ps", "-o", "command=", "-p", k],
+                                          capture_output=True, text=True, timeout=5).stdout
+    except Exception:
+        return None
+    low = cmds.lower()
+    # The codex exec line carries `codex ...` (and the codex-notify path); the
+    # claude exec line carries `claude ...` (+ the tmux-boss-hooks plugin path,
+    # which contains no 'codex' token). So each backend's command matches only
+    # its own name — no cross-false-positive.
+    if "codex" in low:
+        return "codex"
+    if "claude" in low:
+        return "claude"
+    return None
 
 
 def _load_agents():
@@ -671,42 +801,45 @@ def reannounce_agents():
             _save_agents(d)
 
 
-def _composer_stuck(target):
+def _composer_stuck(target, backend=DEFAULT_BACKEND):
     """True if the composer is still holding an UN-submitted draft.
 
     A bracketed paste that lands at/after turn-end collapses into a multiline
     paste-draft — '[Pasted text #N]' with a trailing newline — whose cursor
     sits on a hidden 2nd line, so a bare Enter only EDITS the draft and the
     message never submits (the agent looks alive but never runs the command).
-    Detect that by scanning ONLY the composer region (the ❯ prompt line down to
-    the bypass-permissions footer), so a queued/echoed paste reference ABOVE the
-    composer doesn't false-positive. If a turn is running ('esc to interrupt'),
-    the message clearly submitted."""
+    Detect that by scanning ONLY the composer region (the prompt-glyph line down
+    to the footer), so a queued/echoed paste reference ABOVE the composer doesn't
+    false-positive. If a turn is running (the busy marker), the message clearly
+    submitted. The prompt glyph / footer / paste tag are backend-specific (see
+    MARKERS)."""
+    m = markers_for(backend)
+    prompt, region_end, paste, busy = m["prompt"], m["region_end"], m["paste"], m["busy"]
     r = tmux_run("capture-pane", "-t", target, "-p")
     if r.returncode != 0:
         return False
     txt = r.stdout
-    if "esc to interrupt" in txt.lower():
+    if busy in txt.lower():
         return False
     lines = txt.splitlines()
     pi = None
     for i in range(len(lines) - 1, -1, -1):
-        if lines[i].lstrip().startswith("❯"):   # ❯ composer prompt
+        if lines[i].lstrip().startswith(prompt):   # composer prompt glyph
             pi = i
             break
     if pi is None:
         return False
     region = []
     for l in lines[pi:]:
-        if "bypass permissions on" in l.lower():
+        if region_end in l.lower():
             break
         region.append(l)
-    first_after_prompt = region[0].split("❯", 1)[1] if "❯" in region[0] else ""
+    first_after_prompt = region[0].split(prompt, 1)[1] if prompt in region[0] else ""
     extra = "\n".join(region[1:]).strip()
-    return bool(first_after_prompt.strip()) or bool(extra) or ("[pasted text" in "\n".join(region).lower())
+    return bool(first_after_prompt.strip()) or bool(extra) or (paste in "\n".join(region).lower())
 
 
-def tmux_send_text(target, text):
+def tmux_send_text(target, text, backend=DEFAULT_BACKEND):
     """Bracketed-paste send that reliably SUBMITS, with copy-mode defense.
 
     Two failure modes are handled:
@@ -717,9 +850,18 @@ def tmux_send_text(target, text):
        draft that never submits and that bare Enters only edit. We submit with
        a DELAYED Enter (so it isn't absorbed into the paste), then VERIFY the
        composer actually emptied / the agent went busy; if it's still stuck we
-       recover — BSpace to eat the trailing newline + Enter, then the proven
-       Up + Enter — until it submits. The recovery keys are gated behind the
-       stuck-check so a cleanly-submitted message is never corrupted.
+       recover with BSpace (eat the trailing newline) + Enter, re-verifying
+       after each attempt and STOPPING the instant submission is detected.
+
+    EXACTLY-ONCE submission — do NOT press Up here. `Up` recalls the
+    most-recently submitted message from Claude's input history back INTO the
+    composer; the stuck-check then reads that recalled text as a fresh draft
+    and the next Enter re-submits it, so a single notification went out 2–4×
+    (the duplicate-[AGENT NOTIFICATION] bug — confirmed via the Boss pane and
+    the recovery-burst log). BSpace+Enter cannot recall history: once the draft
+    submits the composer is empty, and a stray BSpace/Enter on an empty Claude
+    composer is a harmless no-op (Claude never submits an empty composer). So
+    the recovery is idempotent and a given message is delivered exactly once.
     """
     # Exit copy-mode / view-mode if active.
     r = tmux_run("display-message", "-t", target, "-p", "#{pane_in_mode}")
@@ -742,20 +884,16 @@ def tmux_send_text(target, text):
         return False, r.stderr.strip()
     time.sleep(0.35)
 
-    # VERIFY submission; recover a stuck paste-draft (BSpace+Enter, then Up+Enter).
+    # VERIFY submission; recover a stuck paste-draft with BSpace+Enter only.
+    # Re-verify after every attempt and bail the instant it submits. NEVER press
+    # Up (history-recall) — that re-submits and is the duplicate-notification bug.
     for _attempt in range(3):
-        if not _composer_stuck(target):
+        if not _composer_stuck(target, backend):
             break
         sys.stderr.write(f"{time.strftime('%H:%M:%S')} mp send: paste-draft did not submit, recovering (attempt {_attempt + 1}) -> {target}\n")
         tmux_run("send-keys", "-t", target, "BSpace")   # eat the trailing newline
         time.sleep(0.15)
-        tmux_run("send-keys", "-t", target, "Enter")
-        time.sleep(0.3)
-        if not _composer_stuck(target):
-            break
-        tmux_run("send-keys", "-t", target, "Up")       # proven recovery: reach the draft line
-        time.sleep(0.15)
-        tmux_run("send-keys", "-t", target, "Enter")
+        tmux_run("send-keys", "-t", target, "Enter")    # submit the existing draft (no history-recall)
         time.sleep(0.3)
 
     # Post-injection mirror: ensure pane is left in text-editing mode.
@@ -803,16 +941,26 @@ def execute_spawn(task):
     else:
         wins = tmux_run("list-windows", "-t", mc_sess, "-F", "#{window_name}").stdout.splitlines()
         if tab in wins:
-            # Idempotent re-spawn: window already exists, re-register and
-            # return success. Callers (e.g. a Boss orchestrating workers) may
-            # legitimately spawn the same id twice if a worker disconnected
-            # but its tmux window survived.
+            # Idempotent re-spawn: window already exists. Callers (e.g. a Boss
+            # orchestrating workers) may legitimately re-spawn the same id if a
+            # worker disconnected but its tmux window survived — so reuse is OK
+            # *only* when the pane is actually running the requested backend.
+            # NEVER silently relabel: if the pane runs a DIFFERENT backend than
+            # asked for, reusing it would flip the registry label (e.g. to
+            # 'codex') while the process stays 'claude' — the exact CEO-caught
+            # bug. Verify by the RUNNING PROCESS and refuse the mismatch loudly
+            # instead of lying in the registry.
+            running = _pane_backend(f"{mc_sess}:{tab}")
+            if running is not None and running != backend:
+                return False, (f"window {mc_sess}:{tab} already runs backend={running!r}; "
+                               f"refusing to relabel it as {backend!r} (that would make the "
+                               f"registry lie). `mp kill {aid}` then re-spawn --backend {backend}.")
             record_agent(aid, backend, boss_id, is_master)
             try:
                 post_json("/agents/register", {"agent_id": aid, "backend": backend, "state": "alive", "boss_id": boss_id, "is_master": is_master})
             except urllib.error.URLError as e:
                 return False, f"re-register failed: {e}"
-            return True, {"agent_id": aid, "tmux_target": f"{mc_sess}:{tab}", "boss_id": boss_id, "is_master": is_master, "reused_existing": True}
+            return True, {"agent_id": aid, "tmux_target": f"{mc_sess}:{tab}", "boss_id": boss_id, "is_master": is_master, "reused_existing": True, "running_backend": running}
         r = tmux_run("new-window", "-t", mc_sess, "-n", tab, "-c", cwd)
         if r.returncode != 0:
             return False, f"new-window failed: {r.stderr.strip()}"
@@ -822,6 +970,20 @@ def execute_spawn(task):
             f"claude --dangerously-skip-permissions "
             f"--settings {shlex.quote(json.dumps({'skipDangerousModePermissionPrompt': True}))} "
             f"--plugin-dir {shlex.quote(PLUGIN_DIR)}"
+        )
+    elif backend == "codex":
+        # Codex's turn-end signal is its `notify` program (NOT a Stop hook).
+        # Point it at the codex-notify shim per-spawn so no global ~/.codex
+        # config edit is required; the shim re-emits emit-event's Stop-branch
+        # notification on the SAME queue contract. `-c key=value` parses value
+        # as TOML — a JSON array is valid TOML. `--dangerously-bypass-approvals-
+        # and-sandbox` is the autonomy analog of Claude's --dangerously-skip-
+        # permissions (composer shows "permissions: YOLO mode").
+        notify_script = os.path.join(PLUGIN_DIR, "hooks", "codex-notify")
+        notify_cfg = "notify=" + json.dumps(["bash", notify_script])
+        spawn_cmd = (
+            f"codex --dangerously-bypass-approvals-and-sandbox "
+            f"-c {shlex.quote(notify_cfg)}"
         )
     else:
         return False, f"backend {backend!r} not supported"
@@ -837,7 +999,11 @@ def execute_spawn(task):
     ]
     if boss_id:
         env_parts.append(f"export BOSS_ID={shlex.quote(boss_id)}")
-    shell_cmd = f"cd {shlex.quote(cwd)} && {' && '.join(env_parts)} && exec {spawn_cmd}"
+    # Env hygiene for codex: a stray AGENT_ROLE inherited from a parent shell
+    # made the legacy codex hook mis-route notifications. mypeople doesn't set
+    # AGENT_ROLE, so this is purely defensive (harmless no-op when unset).
+    pre_exec = "unset AGENT_ROLE && " if backend == "codex" else ""
+    shell_cmd = f"cd {shlex.quote(cwd)} && {' && '.join(env_parts)} && {pre_exec}exec {spawn_cmd}"
 
     target = f"{mc_sess}:{tab}"
     ok, err = tmux_send_text(target, shell_cmd)
@@ -853,6 +1019,39 @@ def execute_spawn(task):
             time.sleep(0.5)
         else:
             return False, "claude TUI didn't show 'bypass permissions on' banner within 30s"
+    elif backend == "codex":
+        # Codex shows interactive gates BEFORE the composer on a fresh start: an
+        # "Update available" prompt and a directory-trust prompt. Pre-seeding
+        # [projects."<cwd>"].trust_level = "trusted" in ~/.codex/config.toml (the
+        # CEO already does this per project) and disabling the update notifier
+        # removes both; this loop ALSO dismisses them defensively so a spawn
+        # never silently hangs on a gate. Ready when the startup banner OR the
+        # composer footer (markers_for('codex')['region_end'], "<model> · <cwd>")
+        # is on screen — the footer is the true "accepting input" signal and the
+        # banner can be delayed by MCP init. Timeout is generous (60s): codex's
+        # MCP startup retries on a bad/expired token, which delays the composer.
+        cm = markers_for("codex")
+        ready, footer = cm["ready"], cm["region_end"]
+        deadline = time.time() + 60
+        while time.time() < deadline:
+            frame = tmux_run("capture-pane", "-t", target, "-p").stdout or ""
+            low = frame.lower()
+            if "do you trust" in low:                       # trust gate
+                tmux_run("send-keys", "-t", target, "Enter")        # default: Yes, continue
+                time.sleep(0.5); continue
+            # Match the NUMBERED update prompt specifically ("1. Update now"),
+            # not the persistent "Update available" info box, so we never
+            # mis-fire keystrokes at the composer once it has rendered.
+            if "update now" in low:                          # update gate
+                tmux_run("send-keys", "-t", target, "Down")         # move off "Update now"
+                time.sleep(0.1)
+                tmux_run("send-keys", "-t", target, "Enter")        # choose Skip
+                time.sleep(0.5); continue
+            if ready in frame or footer in frame:
+                break
+            time.sleep(0.5)
+        else:
+            return False, "codex TUI didn't reach the composer (ready/footer marker) within 60s"
 
     # If --master, bootstrap the Boss with its doctrine: send an onboarding
     # prompt that instructs the agent to read ~/mypeople/boss-CLAUDE.md and
@@ -891,7 +1090,7 @@ def execute_send(task):
     if tmux_run("has-session", "-t", f"mc-{sess}").returncode != 0:
         return False, f"session mc-{sess} does not exist"
     msg = task.get("payload", {}).get("message", "")
-    ok, err = tmux_send_text(target, msg)
+    ok, err = tmux_send_text(target, msg, _agent_backend(aid))
     if not ok:
         return False, err
     return True, {"delivered_to": target}
@@ -907,22 +1106,24 @@ def execute_send(task):
 PEEK_BUSY_MARKER = "esc to interrupt"
 
 
-def peek_state(pane_text):
-    """Classify a Claude agent pane as BUSY / IDLE / UNKNOWN from its live frame.
+def peek_state(pane_text, backend=DEFAULT_BACKEND):
+    """Classify an agent pane as BUSY / IDLE / UNKNOWN from its live frame.
 
     Only the tail (the on-screen UI chrome — status line, composer, footer) is
     inspected so a stale scrollback line can't spoof the state. Use the last 15
     NON-BLANK lines: `capture-pane -S` leaves trailing blank rows on a tall pane
     (e.g. a wide ttyd-attached container is 70+ rows), which would push the
     footer/composer out of a raw last-15 slice and mis-read a healthy idle agent
-    as UNKNOWN."""
+    as UNKNOWN. Busy/idle markers are backend-specific (see MARKERS)."""
+    m = markers_for(backend)
+    idle_markers = m["idle"] if isinstance(m["idle"], tuple) else (m["idle"],)
     tail = "\n".join([l for l in pane_text.splitlines() if l.strip()][-15:])
     low = tail.lower()
-    if PEEK_BUSY_MARKER in low:
-        return "BUSY", "a turn is actively running (esc-to-interrupt present)"
-    if "❯" in tail or "bypass permissions on" in low:
+    if m["busy"] in low:
+        return "BUSY", "a turn is actively running (busy marker present)"
+    if any((mk in tail) or (mk.lower() in low) for mk in idle_markers):
         return "IDLE", "awaiting input (no turn running)"
-    return "UNKNOWN", "no Claude TUI footer detected (starting up, a shell, or exited)"
+    return "UNKNOWN", f"no {backend} TUI footer detected (starting up, a shell, or exited)"
 
 
 def execute_peek(task):
@@ -941,7 +1142,7 @@ def execute_peek(task):
     if r.returncode != 0:
         return False, r.stderr.strip()
     pane = r.stdout
-    state, detail = peek_state(pane)
+    state, detail = peek_state(pane, _agent_backend(aid))
     header = f"[mp peek {aid}] state={state} — {detail}\n" + ("─" * 72) + "\n"
     return True, {"content": header + pane, "state": state, "activity": detail}
 
@@ -1022,7 +1223,7 @@ def execute_answer(task):
         return True, {"answered": target, "selected_option": n}
 
     # Free-form answer: type it literally and submit (custom-answer path).
-    ok, err = tmux_send_text(target, answer)
+    ok, err = tmux_send_text(target, answer, _agent_backend(aid))
     if not ok:
         return False, err
     return True, {"answered": target, "text": answer}
@@ -1339,6 +1540,20 @@ SID=$(echo "$INPUT" | jq -r '.session_id // ""' 2>/dev/null || echo "")
 LAST_MSG=$(echo "$INPUT" | jq -r '.last_assistant_message // ""' 2>/dev/null || echo "")
 TS=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
+# Idempotency key for a notification: a stable digest of (event, session, agent,
+# message). If the Stop hook ever fires twice for one turn-end — or a submit is
+# retried — both carry the SAME key, so the queue-server dedups them inside its
+# window and the Boss is notified exactly once. Portable across Debian (sha256sum)
+# and macOS (shasum).
+idem_key() {  # args: parts that uniquely identify this notification
+  local s="$*"
+  if command -v sha256sum >/dev/null 2>&1; then
+    printf '%s' "$s" | sha256sum | cut -c1-32
+  else
+    printf '%s' "$s" | shasum -a 256 | cut -c1-32
+  fi
+}
+
 # Append to local log
 echo "{\"ts\":\"$TS\",\"event\":\"$EVENT\",\"agent_id\":\"$AGENT_ID\",\"session_id\":\"$SID\"}" >> "$LOG"
 
@@ -1386,8 +1601,9 @@ if [ "$EVENT" = "PreToolUse" ]; then
 $QBLOCK
 Reply with:  mp answer $AGENT_ID <option-number | free text>"
   BOSS_HOST="${BOSS_ID%%/*}"
-  PAYLOAD=$(jq -n --arg ta "$BOSS_ID" --arg th "$BOSS_HOST" --arg msg "$NOTIF" \
-    '{action:"send", target_agent:$ta, target_host:$th, payload:{message:$msg}}')
+  IDEM=$(idem_key "question" "$SID" "$AGENT_ID" "$QBLOCK")
+  PAYLOAD=$(jq -n --arg ta "$BOSS_ID" --arg th "$BOSS_HOST" --arg msg "$NOTIF" --arg idem "$IDEM" \
+    '{action:"send", target_agent:$ta, target_host:$th, idempotency_key:$idem, payload:{message:$msg}}')
   curl -fsS --max-time 3 -X POST "$QUEUE_URL/task/submit" \
     -H "Content-Type: application/json" -H "X-Queue-Secret: $QUEUE_SECRET" \
     -d "$PAYLOAD" >/dev/null 2>&1 || true
@@ -1425,11 +1641,13 @@ jq -n \
 # POST a send task to deliver the notification to the boss's pane
 NOTIF="[AGENT NOTIFICATION] $AGENT_ID finished: $SUMMARY"
 BOSS_HOST="${BOSS_ID%%/*}"
+IDEM=$(idem_key "stop" "$SID" "$AGENT_ID" "$SUMMARY")
 PAYLOAD=$(jq -n \
   --arg target_agent "$BOSS_ID" \
   --arg target_host "$BOSS_HOST" \
   --arg msg "$NOTIF" \
-  '{action: "send", target_agent: $target_agent, target_host: $target_host, payload: {message: $msg}}')
+  --arg idem "$IDEM" \
+  '{action: "send", target_agent: $target_agent, target_host: $target_host, idempotency_key: $idem, payload: {message: $msg}}')
 
 curl -fsS -X POST "$QUEUE_URL/task/submit" \
   -H "Content-Type: application/json" \
@@ -1439,6 +1657,102 @@ curl -fsS -X POST "$QUEUE_URL/task/submit" \
 exit 0
 EOF
 chmod +x "$INSTALL_DIR/plugins/tmux-boss-hooks/hooks/emit-event"
+
+# --- codex-notify: Codex turn-end -> the SAME Stop-hook contract as emit-event.
+# Claude agents emit turn-end via the `Stop` hook above (JSON on stdin). Codex
+# CLI has NO Stop hook; instead it fires its `notify` program on turn completion
+# with the payload as argv[1] and type "agent-turn-complete". The codex exec
+# branch in queue-client.py points codex at THIS script via `-c notify=[...]`,
+# so a codex agent's turn-end posts a byte-identical "[AGENT NOTIFICATION] ...
+# finished: ..." to the Boss. No queue-server / protocol / Boss-doctrine change.
+cat > "$INSTALL_DIR/plugins/tmux-boss-hooks/hooks/codex-notify" <<'EOF'
+#!/bin/bash
+# codex-notify — Codex turn-end -> mypeople Stop-hook contract.
+# Codex passes the notification JSON as argv[1] (NOT stdin, unlike Claude hooks)
+# and the keys are HYPHENATED ("last-assistant-message", "thread-id"). This is
+# the Codex-side equivalent of emit-event's Stop branch: same status file, same
+# /task/submit `send` payload, same idempotency scheme -> the Boss is notified
+# identically regardless of backend. Gating + identity come from the SAME env
+# vars mypeople exports at spawn: AGENT_ID, BOSS_ID, QUEUE_URL, QUEUE_SECRET,
+# INSTALL_DIR.
+
+set -e
+[ -z "${AGENT_ID:-}" ] && exit 0   # not managed by mypeople
+
+INSTALL_DIR="${INSTALL_DIR:-$HOME/mypeople}"
+mkdir -p "$INSTALL_DIR/run"
+LOG="$INSTALL_DIR/run/hook-events.log"
+
+INPUT="${1:-}"
+[ -z "$INPUT" ] && exit 0
+
+# Only act on turn completion; ignore any other notify types.
+NTYPE=$(echo "$INPUT" | jq -r '.type // ""' 2>/dev/null || echo "")
+[ "$NTYPE" != "agent-turn-complete" ] && exit 0
+
+TS=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+LAST_MSG=$(echo "$INPUT" | jq -r '.["last-assistant-message"] // ""' 2>/dev/null || echo "")
+THREAD_ID=$(echo "$INPUT" | jq -r '.["thread-id"] // ""' 2>/dev/null || echo "")
+
+# Idempotency key (same scheme as emit-event) so the queue-server dedups a
+# double-fired/retried notify inside its window. thread-id is Codex's session analog.
+idem_key() {
+  local s="$*"
+  if command -v sha256sum >/dev/null 2>&1; then
+    printf '%s' "$s" | sha256sum | cut -c1-32
+  else
+    printf '%s' "$s" | shasum -a 256 | cut -c1-32
+  fi
+}
+
+echo "{\"ts\":\"$TS\",\"event\":\"agent-turn-complete\",\"agent_id\":\"$AGENT_ID\",\"thread_id\":\"$THREAD_ID\",\"backend\":\"codex\"}" >> "$LOG"
+
+# Parse session+tab from AGENT_ID = host/session:tab (identical to emit-event).
+HOST_PART="${AGENT_ID%%/*}"
+REST="${AGENT_ID#*/}"
+SESS_PART="${REST%%:*}"
+TAB_PART="${REST#*:}"
+STATUS_DIR="$INSTALL_DIR/status/mc-$SESS_PART"
+
+# UTF-8-safe truncation: codex replies often contain multi-byte chars; `head -c`
+# can split a codepoint and corrupt the JSON, so use a codepoint-safe Python slice.
+SUMMARY=$(printf '%s' "$LAST_MSG" | tr '\n' ' ' | python3 -c "import sys; print(sys.stdin.read()[:1000], end='')" 2>/dev/null || printf '%s' "$LAST_MSG" | tr '\n' ' ' | cut -c1-1000)
+
+# Write status file — SAME shape/location the /agents HUD reads.
+mkdir -p "$STATUS_DIR"
+jq -n \
+  --arg agent "$TAB_PART" \
+  --arg session "mc-$SESS_PART" \
+  --arg ts "$TS" \
+  --arg session_id "$THREAD_ID" \
+  --arg summary "$SUMMARY" \
+  --arg agent_id "$AGENT_ID" \
+  --arg boss_id "${BOSS_ID:-}" \
+  '{agent: $agent, session: $session, status: "idle", timestamp: $ts, session_id: $session_id, summary: $summary, agent_id: $agent_id, boss_id: $boss_id}' \
+  > "$STATUS_DIR/$TAB_PART.json"
+
+# If no boss, the status file is enough.
+[ -z "${BOSS_ID:-}" ] && exit 0
+
+# POST the SAME send task that emit-event's Stop branch posts.
+NOTIF="[AGENT NOTIFICATION] $AGENT_ID finished: $SUMMARY"
+BOSS_HOST="${BOSS_ID%%/*}"
+IDEM=$(idem_key "stop" "$THREAD_ID" "$AGENT_ID" "$SUMMARY")
+PAYLOAD=$(jq -n \
+  --arg target_agent "$BOSS_ID" \
+  --arg target_host "$BOSS_HOST" \
+  --arg msg "$NOTIF" \
+  --arg idem "$IDEM" \
+  '{action: "send", target_agent: $target_agent, target_host: $target_host, idempotency_key: $idem, payload: {message: $msg}}')
+
+curl -fsS -X POST "$QUEUE_URL/task/submit" \
+  -H "Content-Type: application/json" \
+  -H "X-Queue-Secret: $QUEUE_SECRET" \
+  -d "$PAYLOAD" >/dev/null 2>&1 || true
+
+exit 0
+EOF
+chmod +x "$INSTALL_DIR/plugins/tmux-boss-hooks/hooks/codex-notify"
 ```
 
 ### 7.5. Write the HUD dashboard HTML
@@ -1446,6 +1760,10 @@ chmod +x "$INSTALL_DIR/plugins/tmux-boss-hooks/hooks/emit-event"
 **Why**: queue-server's `/dashboard` route serves this file with `__INJECT_SECRET__` replaced by the live `QUEUE_SECRET`. The page then polls `/agents` + `/clients` every 3s and renders rows. Each row has a "attach" link to ttyd with the correct `mc-<sess>:<tab>` target.
 
 ```bash
+# [self-contained only] — the HUD is served by the upstream queue-server in JOIN-mode.
+if [ -n "${UPSTREAM_QUEUE_URL:-}" ]; then
+  echo "[JOIN] skipping local HUD dashboard (served by upstream $UPSTREAM_QUEUE_URL)"
+else
 cat > "$INSTALL_DIR/bin/dashboard.html" <<'HTML_EOF'
 <!doctype html>
 <html><head><meta charset="utf-8"><title>mypeople — HUD</title>
@@ -1512,21 +1830,64 @@ setInterval(refresh, 3000);
 </body></html>
 HTML_EOF
 chmod 644 "$INSTALL_DIR/bin/dashboard.html"
+fi
 ```
+
+### 7.6. Codex backend support (optional — for `--backend codex` agents)
+
+**Why**: `mp spawn ... --backend codex` launches an OpenAI Codex CLI agent instead of Claude. The wiring needed for this is ALREADY in the artifacts written above — nothing extra is required at install time:
+
+- **Turn-end → Boss notification**: the queue-client's codex exec branch launches codex with `-c notify=["bash","$INSTALL_DIR/plugins/tmux-boss-hooks/hooks/codex-notify"]`, so notify is wired **per-spawn** — no global `~/.codex/config.toml` edit, and no risk of clobbering an existing `notify` the host already uses. `codex-notify` (written in Step 7) maps Codex's `agent-turn-complete` to the same `[AGENT NOTIFICATION] … finished: …` the Claude Stop hook posts.
+- **Autonomy**: codex is launched with `--dangerously-bypass-approvals-and-sandbox` (the analog of Claude's `--dangerously-skip-permissions`).
+- **Startup gates**: a fresh codex shows an "Update available" prompt and a directory-trust prompt before its composer. The codex readiness probe in `execute_spawn` **auto-dismisses both** (Skip / Yes) and waits up to 60s for the composer footer — so spawns don't hang on a gate even with no pre-seeded config.
+- **TUI markers**: spawn/peek/send key off the per-backend `MARKERS` table (Codex composer glyph `›` U+203A, busy `esc to interrupt`, footer `<model> · <cwd>`). The Claude path is byte-identical (`markers_for("claude")` equals the original hardcoded strings; unknown backends fall back to claude).
+
+**The one external prerequisite (NOT installed by this seed)**: the `codex` CLI must be present on PATH **and logged in** before a `--backend codex` agent can complete a turn. This seed does not install or authenticate codex.
+
+```bash
+# Optional pre-flight: report codex availability/auth. Does NOT install or log in
+# codex (that is a host-owner decision — ChatGPT re-login or an OpenAI API key).
+if command -v codex >/dev/null 2>&1; then
+  echo "[codex] CLI present: $(codex --version 2>/dev/null || echo '?')"
+  # `login status` only checks token PRESENCE, not validity — a stale/rotated
+  # ChatGPT refresh token still reports "Logged in" yet fails turns with 401
+  # token_expired. Treat a real turn as the only proof of working auth.
+  codex login status 2>&1 | sed 's/^/[codex] /' || true
+  echo "[codex] NOTE: --backend codex needs a VALID login. If turns 401, re-auth with"
+  echo "[codex]   'codex login' (ChatGPT, interactive)  OR  'printenv OPENAI_API_KEY | codex login --with-api-key'."
+else
+  echo "[codex] CLI not installed — --backend claude works; --backend codex unavailable until 'codex' is installed + logged in."
+fi
+```
+
+> **Optional global config (only if you prefer it over per-spawn `-c notify`)**: you may instead set `notify = ["bash","$INSTALL_DIR/plugins/tmux-boss-hooks/hooks/codex-notify"]` in `~/.codex/config.toml`. `codex-notify` is gated on `$AGENT_ID`, so it is a harmless no-op for non-mypeople codex sessions. Do this only if the host has no other `notify` consumer to avoid clobbering it. The per-spawn wiring above is the default and needs no such edit.
 
 ### 8. Write `queue.env`
 
 ```bash
-if [ -s "$HOME/.config/mypeople/queue.env" ] && grep -q '^QUEUE_SECRET=' "$HOME/.config/mypeople/queue.env"; then
-  SECRET=$(grep '^QUEUE_SECRET=' "$HOME/.config/mypeople/queue.env" | head -1 | cut -d= -f2-)
-else
-  SECRET=$(python3 -c 'import secrets; print(secrets.token_hex(32))')
-fi
 QUEUE_PORT="${QUEUE_PORT:-9900}"
 HOST_ID="${HOST_ID:-$(hostname -s)}"
-TS_HOSTNAME="${TS_HOSTNAME:-mypeople-$(hostname -s)}"
+if [ -n "${UPSTREAM_QUEUE_URL:-}" ]; then
+  # [JOIN] point QUEUE_URL at the upstream; reuse the upstream secret VERBATIM
+  # (never auto-generate in JOIN-mode — a secret mismatch means every request
+  # is 401). The secret is written only into this 0600 file, never echoed.
+  if [ -z "${UPSTREAM_QUEUE_SECRET:-}" ]; then echo "BLOCKED_REASON=upstream_secret_not_set"; exit 1; fi
+  QUEUE_URL_VAL="${UPSTREAM_QUEUE_URL%/}"
+  SECRET="${UPSTREAM_QUEUE_SECRET}"
+  TS_LINE=""
+else
+  # [self-contained] local central node; reuse existing local secret or auto-gen.
+  if [ -s "$HOME/.config/mypeople/queue.env" ] && grep -q '^QUEUE_SECRET=' "$HOME/.config/mypeople/queue.env"; then
+    SECRET=$(grep '^QUEUE_SECRET=' "$HOME/.config/mypeople/queue.env" | head -1 | cut -d= -f2-)
+  else
+    SECRET=$(python3 -c 'import secrets; print(secrets.token_hex(32))')
+  fi
+  QUEUE_URL_VAL="http://127.0.0.1:${QUEUE_PORT}"
+  TS_HOSTNAME="${TS_HOSTNAME:-mypeople-$(hostname -s)}"
+  TS_LINE="TS_HOSTNAME=${TS_HOSTNAME}"
+fi
 cat > "$HOME/.config/mypeople/queue.env" <<EOF
-QUEUE_URL=http://127.0.0.1:${QUEUE_PORT}
+QUEUE_URL=${QUEUE_URL_VAL}
 QUEUE_SECRET=${SECRET}
 QUEUE_PORT=${QUEUE_PORT}
 QUEUE_HEARTBEAT=30
@@ -1534,11 +1895,11 @@ QUEUE_POLL_INTERVAL=1.0
 HOST_ID=${HOST_ID}
 INSTALL_DIR=${INSTALL_DIR:-$HOME/mypeople}
 TTYD_PORT=${TTYD_PORT:-7681}
-TS_HOSTNAME=${TS_HOSTNAME}
+${TS_LINE}
 # UTF-8 locale is REQUIRED. Hosts that default to POSIX (many Linux
 # containers, some bare-metal Linux installs) cause tmux to collapse
 # multi-byte UTF-8 chars (every glyph claude TUI uses — ●, ⏺, ✻, ⏵, ⎿,
-# ❯, box-drawing — gets stripped to ASCII `_` in tmux's internal buffer
+# ❯, box-drawing — gets stripped to an ASCII underscore in tmux's internal buffer
 # and that's what reaches the browser via ttyd). macOS defaults to
 # UTF-8 already; setting these explicitly is harmless and makes the
 # behavior portable.
@@ -1550,7 +1911,9 @@ chmod 600 "$HOME/.config/mypeople/queue.env"
 
 ### 8.5. Bring this host onto the tailnet
 
-**Intent**: this host gets its own tailnet identity (`$TS_HOSTNAME`) and a tailscale IP. After this Step, `http://<TS_HOSTNAME>.<tailnet>.ts.net:9900/dashboard` will be reachable from any other tailnet node.
+**[JOIN] first**: a JOIN node does NOT claim its own `$TS_HOSTNAME` identity — it only needs to *reach* the upstream. Test `curl -fsS "$UPSTREAM_QUEUE_URL/health"`. If it returns 200, this host is already on the right network (already on the tailnet, or the upstream is LAN-reachable) → **SKIP the rest of this Step entirely** (`TS_AUTHKEY`/`TS_HOSTNAME` not needed). If it does NOT return 200 and `TS_AUTHKEY` is set, run `tailscale up` as below (hostname `$HOST_ID` is fine) to join the tailnet, then re-test `curl "$UPSTREAM_QUEUE_URL/health"`. If still unreachable, stop with `BLOCKED_REASON=upstream_unreachable`. The rest of this Step ([self-contained]) does not apply to JOIN nodes.
+
+**[self-contained] Intent**: this host gets its own tailnet identity (`$TS_HOSTNAME`) and a tailscale IP. After this Step, `http://<TS_HOSTNAME>.<tailnet>.ts.net:9900/dashboard` will be reachable from any other tailnet node.
 
 The mechanism varies by host:
 
@@ -1573,7 +1936,7 @@ The mechanism varies by host:
     --ssh=false --accept-routes=false
   ```
 
-`$TS_AUTHKEY` is required. If unset, stop with `BLOCKED_REASON=ts_authkey_not_set`.
+`$TS_AUTHKEY` is required **in self-contained mode**. If unset there, stop with `BLOCKED_REASON=ts_authkey_not_set`. (In JOIN-mode it's only consulted via the **[JOIN] first** path above.)
 
 **Verify by intent**: `tailscale status --json` reports `.Self.Online == true` and `.Self.HostName == $TS_HOSTNAME`; `tailscale ip -4` returns a `100.x.x.x` address. Stop with `BLOCKED_REASON=tailscale_no_ipv4_assigned` if not.
 
@@ -1581,41 +1944,85 @@ The mechanism varies by host:
 
 ```bash
 set -a; . "$HOME/.config/mypeople/queue.env"; set +a
-nohup python3 -u "$INSTALL_DIR/bin/queue-server.py" > "$INSTALL_DIR/run/queue-server.log" 2>&1 &
-echo $! > "$INSTALL_DIR/run/queue-server.pid"
-for i in $(seq 1 25); do
-  curl -fsS "http://127.0.0.1:${QUEUE_PORT}/health" >/dev/null 2>&1 && break
-  sleep 0.2
+
+# Determine the ttyd port and the tailnet-reachable attach URL BEFORE starting
+# the queue-client, so the client advertises a WORKING attach_base in its very
+# first heartbeat. The HUD builds each agent's attach link from the OWNING
+# client's attach_base; without this a cross-host/JOIN node's link falls back to
+# the HUD host's own localhost ttyd → dead link from any other machine.
+TTYD_PORT="${TTYD_PORT:-7681}"
+# A FOREIGN ttyd / web-terminal may already hold this port (common on shared
+# hosts and multi-node JOIN setups). Binding a busy port makes ttyd exit
+# immediately, and a port-only health check would be FOOLED by the foreign
+# listener answering on it. Pick the first FREE port at/above the requested one.
+port_busy() { python3 -c 'import socket,sys; s=socket.socket(); r=s.connect_ex(("127.0.0.1",int(sys.argv[1]))); s.close(); sys.exit(0 if r==0 else 1)' "$1"; }
+while port_busy "$TTYD_PORT"; do
+  echo "ttyd: port $TTYD_PORT already in use (foreign listener) — trying $((TTYD_PORT+1))"
+  TTYD_PORT=$((TTYD_PORT+1))
 done
+if grep -q '^TTYD_PORT=' "$HOME/.config/mypeople/queue.env"; then
+  sed -i.bak "s/^TTYD_PORT=.*/TTYD_PORT=${TTYD_PORT}/" "$HOME/.config/mypeople/queue.env" && rm -f "$HOME/.config/mypeople/queue.env.bak"
+else
+  echo "TTYD_PORT=${TTYD_PORT}" >> "$HOME/.config/mypeople/queue.env"
+fi
+# Advertise the node's TAILNET-reachable ttyd so the HUD emits an attach link
+# that works from any tailnet browser (not localhost). If the node isn't on a
+# tailnet, leave it empty (HUD falls back to the HUD-host localhost — fine for a
+# single self-contained node).
+TS_IP4="$(tailscale ip -4 2>/dev/null | head -1)"
+if [ -n "$TS_IP4" ]; then
+  TTYD_PUBLIC_URL="http://${TS_IP4}:${TTYD_PORT}"
+  if grep -q '^TTYD_PUBLIC_URL=' "$HOME/.config/mypeople/queue.env"; then
+    sed -i.bak "s#^TTYD_PUBLIC_URL=.*#TTYD_PUBLIC_URL=${TTYD_PUBLIC_URL}#" "$HOME/.config/mypeople/queue.env" && rm -f "$HOME/.config/mypeople/queue.env.bak"
+  else
+    echo "TTYD_PUBLIC_URL=${TTYD_PUBLIC_URL}" >> "$HOME/.config/mypeople/queue.env"
+  fi
+  echo "ttyd attach advertised at $TTYD_PUBLIC_URL"
+fi
+# Re-source so the queue-client inherits the final TTYD_PORT + TTYD_PUBLIC_URL.
+set -a; . "$HOME/.config/mypeople/queue.env"; set +a
+
+if [ -z "${UPSTREAM_QUEUE_URL:-}" ]; then
+  # [self-contained] start the local queue-server and wait for its health.
+  nohup python3 -u "$INSTALL_DIR/bin/queue-server.py" > "$INSTALL_DIR/run/queue-server.log" 2>&1 &
+  echo $! > "$INSTALL_DIR/run/queue-server.pid"
+  for i in $(seq 1 25); do
+    curl -fsS "http://127.0.0.1:${QUEUE_PORT}/health" >/dev/null 2>&1 && break
+    sleep 0.2
+  done
+else
+  # [JOIN] no local queue-server — confirm the UPSTREAM is reachable AND accepts
+  # our secret BEFORE starting the client (fail fast with a clear reason).
+  curl -fsS "${QUEUE_URL}/health" | grep -q '"status"' || { echo "BLOCKED_REASON=upstream_unreachable"; exit 1; }
+  curl -fsS -H "X-Queue-Secret: ${QUEUE_SECRET}" "${QUEUE_URL}/clients" >/dev/null 2>&1 || { echo "BLOCKED_REASON=upstream_secret_rejected"; exit 1; }
+fi
+# Both modes: queue-client heartbeats to QUEUE_URL (local in self-contained,
+# upstream in JOIN), registering this host as a client.
 nohup python3 -u "$INSTALL_DIR/bin/queue-client.py" > "$INSTALL_DIR/run/queue-client.log" 2>&1 &
 echo $! > "$INSTALL_DIR/run/queue-client.pid"
 
-# ttyd: per-tab browser-attach.
+# ttyd: per-tab browser-attach (port already chosen + advertised above).
 #   -W = writable so the browser user can type.
-#   -a = allow client to pass command args via URL (?arg=foo&arg=bar).
-#        Without -a the HUD's attach links — http://host:7681/?arg=-t&arg=mc-X:Y
-#        — are silently ignored and the user lands in a default tmux session
-#        (sometimes even a bogus session named `-t`). MANDATORY for per-tab attach.
-#   -t fontFamily/fontSize = xterm.js options (default xterm.js font lacks
-#        glyphs claude uses: ❯ ● ✻ etc.). Menlo/Monaco standard on macOS; on
-#        Linux the browser falls back to its first available monospace match.
-#   -t disableLeaveAlert=true = kill the browser's "are you sure you want to
-#        close this page?" prompt on tab close. ttyd registers a beforeunload
-#        handler by default; this client option makes it removeEventListener
-#        the handler on connect. Safe: the underlying tmux session persists
-#        across detach — closing the tab only drops this ttyd client, no work
-#        is lost.
-TTYD_PORT="${TTYD_PORT:-7681}"
+#   -a = allow URL args (?arg=-t&arg=mc-X:Y) — MANDATORY for per-tab attach;
+#        without it the link is ignored and the user lands in a default session.
+#   -t fontFamily/fontSize = xterm.js glyph support (❯ ● ✻ …).
+#   -t disableLeaveAlert=true = kill the browser tab-close prompt (the tmux
+#        session persists across detach, so dropping the ttyd client loses no work).
 nohup ttyd -W -a -p "$TTYD_PORT" \
   -t 'fontFamily=Menlo, Monaco, "Cascadia Mono", "Fira Code", "Courier New", monospace' \
   -t 'fontSize=13' \
   -t 'disableLeaveAlert=true' \
   tmux attach > "$INSTALL_DIR/run/ttyd.log" 2>&1 &
-echo $! > "$INSTALL_DIR/run/ttyd.pid"
+TTYD_PID=$!
+echo "$TTYD_PID" > "$INSTALL_DIR/run/ttyd.pid"
 for i in $(seq 1 25); do
   curl -fsS -o /dev/null "http://127.0.0.1:${TTYD_PORT}/" && break
   sleep 0.2
 done
+# Assert OUR ttyd actually bound (the PID we launched is still alive) — not a
+# foreign listener masquerading on the port. Catches the silent bind failure.
+sleep 0.3
+ps -p "$TTYD_PID" >/dev/null 2>&1 || { echo "BLOCKED_REASON=ttyd_failed_to_bind (port ${TTYD_PORT}); check $INSTALL_DIR/run/ttyd.log"; exit 1; }
 ```
 
 ### 10. PATH fix
@@ -1643,6 +2050,65 @@ set -e
 INSTALL_DIR="${INSTALL_DIR:-$HOME/mypeople}"
 export PATH="$HOME/.local/bin:$PATH"
 HOST_ID="$(grep '^HOST_ID=' "$HOME/.config/mypeople/queue.env" | cut -d= -f2-)"
+QUEUE_URL_CFG="$(grep '^QUEUE_URL=' "$HOME/.config/mypeople/queue.env" | cut -d= -f2-)"
+QSECRET="$(grep '^QUEUE_SECRET=' "$HOME/.config/mypeople/queue.env" | cut -d= -f2-)"
+
+# Mode is inferred from the installed QUEUE_URL: loopback => self-contained,
+# anything else => JOIN (the client points at an upstream queue-server).
+case "$QUEUE_URL_CFG" in
+  http://127.0.0.1:*|http://localhost:*) MODE=self ;;
+  *) MODE=join ;;
+esac
+
+if [ "$MODE" = join ]; then
+  # ===== JOIN-mode Verify (cross-host, capability §12) =====
+  # Prove THIS node is a heartbeating client of the upstream AND that tasks
+  # submitted upstream round-trip to this node's queue-client — with NO Claude
+  # device-login (Rule 13: agent auth is per-spawn, established later).
+
+  # queue-client alive; and NO local queue-server should be running here.
+  ps -p "$(cat $INSTALL_DIR/run/queue-client.pid)" -o command= 2>/dev/null | grep -q queue-client.py || { echo "FAIL: queue-client not running"; exit 1; }
+  if [ -f "$INSTALL_DIR/run/queue-server.pid" ] && ps -p "$(cat $INSTALL_DIR/run/queue-server.pid)" >/dev/null 2>&1; then
+    echo "FAIL: a local queue-server is running in JOIN-mode (should use the upstream)"; exit 1
+  fi
+
+  # Upstream reachable and accepts our secret.
+  curl -fsS "$QUEUE_URL_CFG/health" | grep -q '"status": *"ok"' || { echo "FAIL: upstream /health not OK at $QUEUE_URL_CFG"; exit 1; }
+  curl -fsS -H "X-Queue-Secret: $QSECRET" "$QUEUE_URL_CFG/clients" >/dev/null || { echo "FAIL: upstream rejected our secret (401)"; exit 1; }
+
+  # THIS node is registered as a heartbeating client upstream within a heartbeat cycle.
+  HB="$(grep '^QUEUE_HEARTBEAT=' "$HOME/.config/mypeople/queue.env" | cut -d= -f2-)"; HB="${HB:-30}"
+  REG=0
+  for i in $(seq 1 $((HB*2+10))); do
+    curl -fsS -H "X-Queue-Secret: $QSECRET" "$QUEUE_URL_CFG/clients" \
+      | jq -e --arg h "$HOST_ID" '.[] | select(.hostname==$h)' >/dev/null 2>&1 && { REG=1; break; }
+    sleep 1
+  done
+  [ "$REG" = 1 ] || { echo "FAIL: this node ($HOST_ID) never appeared in upstream /clients"; exit 1; }
+
+  # Cross-host TASK TRANSPORT round-trip (no Claude auth): a peek for a
+  # non-existent local agent must come back as a clean "session ... does not
+  # exist" error — proving submit(upstream)->route->poll(here)->execute->result.
+  # A timeout would instead mean this node's client isn't polling the upstream.
+  POUT=$(mp peek "main:__join_verify_$$__" 2>&1 || true)
+  echo "$POUT" | grep -qi "does not exist" || { echo "FAIL: cross-host task transport (peek round-trip) did not complete: $POUT"; exit 1; }
+
+  # ttyd up for per-tab browser-attach (attaches to LOCAL tmux on this node).
+  TTYD_PORT="$(grep '^TTYD_PORT=' "$HOME/.config/mypeople/queue.env" | cut -d= -f2-)"; TTYD_PORT="${TTYD_PORT:-7681}"
+  curl -fsS -o /dev/null -w '%{http_code}' "http://127.0.0.1:${TTYD_PORT}/" | grep -q 200 || { echo "FAIL: ttyd not responding on $TTYD_PORT"; exit 1; }
+  ps -eo command 2>/dev/null | grep -E 'ttyd.* -a .* tmux attach' | grep -qv grep || { echo "FAIL: ttyd not running with '-a ... tmux attach'"; ps -eo command 2>/dev/null | grep ttyd | grep -v grep | head -3; exit 1; }
+
+  # queue-client running with a UTF-8 locale (tmux unicode integrity for attach).
+  QC_PID=$(cat "$INSTALL_DIR/run/queue-client.pid")
+  if [ -r "/proc/$QC_PID/environ" ]; then QC_ENV=$(tr '\0' '\n' < /proc/$QC_PID/environ); else QC_ENV=$(ps eww -p "$QC_PID" -o command= 2>/dev/null | tr ' ' '\n'); fi
+  echo "$QC_ENV" | grep -qE '^LANG=.*[Uu][Tt][Ff].?8' || { echo "FAIL: queue-client without UTF-8 LANG — tmux will mangle unicode to underscores"; exit 1; }
+
+  echo "JOIN-mode OK: $HOST_ID heartbeating to $QUEUE_URL_CFG; cross-host task transport confirmed; ttyd live."
+  echo "VERIFY_OK"
+  exit 0
+fi
+
+# ===== self-contained Verify (original) =====
 
 # --- core runtime invariants ---
 curl -fsS http://127.0.0.1:9900/health | grep -q '"status": *"ok"' || { echo "FAIL: /health"; exit 1; }
@@ -1901,11 +2367,18 @@ echo "VERIFY_OK"
 ## Failure modes
 
 
+**`mp spawn --backend codex` says it spawned codex, but `ps` shows the pane running `claude`** → the registry label is NOT proof; the running process is. Two causes, both fixed in this seed:
+  1. **Stale daemon.** The codex exec branch lives in `queue-client.py`, but a *long-running* queue-client holds its bytecode in memory — editing the file does NOT reload an already-running interpreter. If you add/change the codex path, you MUST restart the queue-client (`pkill -f bin/queue-client.py` then relaunch with the queue.env exported) or every spawn keeps using the OLD handler. Verify the restart took: `ps -o lstart= -p "$(cat run/queue-client.pid)"` is newer than the file's mtime, and the pid file matches the live pid.
+  2. **Silent relabel on idempotent re-spawn.** When the target window already exists, `execute_spawn` reuses it and re-registers under the *requested* backend. Before the fix it did this WITHOUT checking the running process — so `--backend codex` onto a window already holding a `claude` pane flipped the registry to `codex` and returned success while claude kept running (every "codex" agent was a mislabeled claude). The fix: `_pane_backend()` reads the pane's `#{pane_pid}` command line (+ children) and the reuse path REFUSES a backend mismatch (`window … already runs backend='claude'; refusing to relabel … kill it first`). Reuse is allowed only when the live process matches.
+  Always prove a codex agent by the process, never the label: `ps -o command= -p "$(tmux list-panes -t mc-<sess>:<tab> -F '#{pane_pid}')"` must show `codex --dangerously-bypass-approvals-and-sandbox`, whose child is the `@openai/codex-darwin-arm64/.../codex` binary. (R14: the seed is the artifact and the running *process* is the proof — a registry/gate label is a false green.)
+
 **Status file never written** → Stop hook didn't fire. Check `$INSTALL_DIR/run/hook-events.log` for any entries; if empty, the plugin didn't load — verify `--plugin-dir` was on the spawned `claude` command line and `hooks.json` parses.
 
 **Status file exists but `summary` is empty** → claude didn't actually emit a last_assistant_message before stopping. Either the worker hit an error early or claude's Stop hook payload schema changed. Inspect `hook-events.log` and the worker's pane.
 
 **Notification never lands in Boss pane** → check that `BOSS_ID` env var was set on the worker (`tmux capture-pane -t mc-main:worker-1 -p -S -100 | grep BOSS_ID`); check queue-client log for the inbound send task targeting Boss; check queue-server log for the POST from emit-event.
+
+**`--backend codex` spawn fails or hangs / no codex notification** → first confirm codex auth is VALID (not just present): `codex login status` reports "Logged in" even on a stale/rotated token, but turns 401 with `token_expired` and the composer is delayed by failed MCP init — which can trip the readiness probe. Peek the pane (`tmux capture-pane -t mc-<sess>:<tab> -p -S -120`) for `token_expired` / "sign in again"; if present, re-auth codex (`codex login`, or `printenv OPENAI_API_KEY | codex login --with-api-key`). If the agent runs but the Boss never hears about turn-end, confirm the exec line carried `-c notify=[...codex-notify...]` (peek scrollback), that `codex-notify` is executable in `plugins/tmux-boss-hooks/hooks/`, and that `hook-events.log` shows an `agent-turn-complete` line. Codex turn-end uses `notify` (argv[1], hyphenated keys), NOT a Stop hook — there is no `--plugin-dir` involvement on the codex path.
 
 **Pane in copy-mode swallowed our send** → the target pane was scrolled (mouse wheel, manual entry, etc.) which puts tmux in copy/view-mode (`#{pane_in_mode}=1`). In that state `send-keys` types INTO copy-mode commands instead of the TUI's input buffer — silent failure. `tmux_send_text` auto-exits via `send-keys -X cancel` before every paste, AND mirrors the check after Enter so the pane is returned to text-editing mode for any human who picks it up next. Invariant: `pane_in_mode == 0` on every successful return of `tmux_send_text`. Keep both halves of this defense.
 

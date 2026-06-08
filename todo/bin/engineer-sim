@@ -3,8 +3,8 @@
 
 Given a task id, it does the trivial "work" for a machine-checkable done-condition
 of the form `file <path> contains <text>` (writes <text> to <path>), attaches a
-proof, and flips the task to awaiting_verify — exactly what a real engineer would
-do via the queue. In a live runtime this role is a real `mp` engineer agent.
+proof, and leaves the task 'working' with a lastStatus — exactly what a real engineer
+would do via the queue. In a live runtime this role is a real `mp` engineer agent.
 
 Env: TODO_HOST, QUEUE_SECRET, SIM_FAIL=1 (produce wrong proof to exercise re-ping).
 """
@@ -32,8 +32,8 @@ def main():
         open(path, "w").write("WRONG" if FAIL else want)
         post("/todo/proof", {"task_id": tid, "type": "text",
                              "ref": f"wrote {path}", "by": "sim-engineer"})
-    post("/todo/status", {"id": tid, "state": "awaiting_verify",
-                          "lastStatus": "engineer finished; awaiting verify"})
+    post("/todo/status", {"id": tid, "state": "working",
+                          "lastStatus": "engineer finished; proof attached, awaiting Boss verify"})
 
 if __name__ == "__main__":
     main()

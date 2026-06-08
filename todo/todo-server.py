@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""todo-v2 server — the CEO's priority board as the Boss's source of truth.
+"""todo server — the CEO's priority board as the Boss's source of truth.
 
 Slice: API + shared store + PING STATE MACHINE. Designed to be inlined (heredoc)
-into seeds/todo-v2.seed.md and to run either:
+into seeds/todo.seed.md and to run either:
   - standalone in a clean container (boss pings go to a file sink; TODO_TEST_SINK=1), or
   - on top of a live mypeople runtime (boss pings go through `mp send main:Boss`).
 
@@ -22,7 +22,7 @@ BOARD_PATH  = TODO_DIR / "board.v2.json"
 INBOX_LOG   = TODO_DIR / "boss-inbox.log"
 PING_CRON   = float(os.environ.get("PING_CRON_SEC", "120"))   # unassigned-card cron (CEO: 2 min)
 IDLE_GRACE  = float(os.environ.get("IDLE_GRACE_SEC", "60"))    # assigned idle-post-stop-hook (1 min)
-IDLE_STALL  = float(os.environ.get("IDLE_STALL_SEC", "300"))   # assigned-but-idle WATCHDOG threshold (5 min)
+IDLE_STALL  = float(os.environ.get("IDLE_STALL_SEC", "180"))   # assigned-but-idle WATCHDOG threshold (3 min)
 STALL_REPING= float(os.environ.get("STALL_REPING_SEC", "300")) # re-ping throttle per stalled card
 WATCHDOG    = float(os.environ.get("WATCHDOG_SEC", "60"))      # watchdog scan interval
 STATUS_DIR  = Path(os.environ.get("STATUS_DIR", str(Path.home() / "mypeople" / "status")))
@@ -35,7 +35,7 @@ TEST_SINK   = os.environ.get("TODO_TEST_SINK", "0") == "1"
 BOSS_AGENT  = os.environ.get("BOSS_AGENT", "main:Boss")
 HTML_PATH   = Path(os.environ.get("TODO_HTML", str(Path(__file__).resolve().parent / "todos.html")))
 
-DISPATCHABLE_FROM = {"ready"}
+VALID_STATES = {"needs_brainstorm", "working", "blocked", "done"}   # 4-state model (CEO): in-progress is always 'working'
 ACTIVE = lambda t: t.get("workToDone") and t.get("state") != "done"
 _lock = threading.RLock()
 # per-agent last stop-hook state: agent_id -> "idle" | "working"
@@ -103,7 +103,7 @@ def boss_ping(task_id, reason):
         t["pingsToBoss"] = t.get("pingsToBoss", 0) + 1
         t["updated"] = now()
         save(b)
-        msg = f"[todo-v2] task {task_id} ({t.get('text','')!r}): {reason}. " \
+        msg = f"[todo] task {task_id} ({t.get('text','')!r}): {reason}. " \
               f"state={t['state']} assignee={t['assignee']} lastStatus={t.get('lastStatus','')!r}"
     try:
         INBOX_LOG.parent.mkdir(parents=True, exist_ok=True)
@@ -125,7 +125,7 @@ def cron_loop():
             t = load()["tasks"].get(tid)
             if t and ACTIVE(t) and not t.get("assignee") and t.get("state") != "blocked":
                 reason = "needs brainstorm" if t["state"] == "needs_brainstorm" \
-                         else "ready & unassigned — assign+dispatch"
+                         else "working & unassigned — assign+dispatch"
                 boss_ping(tid, f"cron(unassigned): {reason}")
 
 # ── ping machine (b): idle-driven — fired by the ASSIGNED engineer's stop hook ──
@@ -274,8 +274,41 @@ def agent_busy(agent_id):
         print(f"[busy] {agent_id} pane={pp} cpu(excl-mcp)={cpu:.1f} by_name={by_name} -> {busy} :: {names}", flush=True)
     return busy
 
+# Ground-truth BUSY signal — the SAME marker `mp peek` uses. Claude Code AND Codex print
+# "esc to interrupt" in the TUI footer ONLY while a turn is actively running (Codex wraps it
+# as "* Working (Ns * esc to interrupt)"). A deep-thinking / long-turn agent burns ~no CPU and
+# writes ~no transcript mid-turn, so the CPU/transcript signals miss it and the watchdog would
+# falsely nudge it. This pane read is the authoritative "is a turn running RIGHT NOW?" check.
+PEEK_BUSY_MARKER = "esc to interrupt"
+
+def agent_pane_busy(agent_id):
+    """True if the agent's live tmux pane shows the busy marker (a turn is actively running),
+    classified exactly like `mp peek`/peek_state: last 15 NON-BLANK lines of the frame contain
+    'esc to interrupt'. Returns False if the pane can't be read (no tmux) -> other signals decide."""
+    try:
+        sess, tab = agent_id.split("/", 1)[1].split(":", 1)
+    except Exception:
+        return False
+    try:
+        r = subprocess.run(["tmux", "capture-pane", "-t", f"mc-{sess}:{tab}", "-p", "-S", "-200"],
+                           capture_output=True, text=True, timeout=5)
+        if r.returncode != 0: return False
+        tail = "\n".join([l for l in r.stdout.splitlines() if l.strip()][-15:]).lower()
+        busy = PEEK_BUSY_MARKER in tail
+        if os.environ.get("DEBUG_BUSY") == "1":
+            print(f"[pane-busy] {agent_id} mc-{sess}:{tab} marker={busy}", flush=True)
+        return busy
+    except Exception:
+        return False
+
 def assignee_idle_secs(agent_id):
-    """Idle seconds if the assigned agent looks parked/stalled, else None (active/grace/busy-job)."""
+    """Idle seconds if the assigned agent looks parked/stalled, else None (active/grace/busy-job).
+
+    The nudge is gated on the agent's ACTUAL state, never just elapsed-time: a turn running RIGHT
+    NOW (TUI busy marker, the mp-peek ground truth) is BUSY and is never nudged, even if the
+    stop-hook timestamp is stale and the transcript is quiet (deep-thinking long turn). Only a
+    genuinely IDLE-at-prompt agent past the threshold is reported as stalled."""
+    if agent_pane_busy(agent_id): return None              # a turn is actively running NOW -> BUSY -> never a false nudge
     d = _status_for(agent_id)
     if not d: return IDLE_STALL + 1                         # no status -> can't confirm active -> stalled
     if d.get("status") != "idle": return None              # explicitly busy
@@ -295,7 +328,7 @@ def watchdog_loop():
             ping = None
             with _lock:
                 b = load(); t = b["tasks"].get(tid)
-                if not t or not (t.get("workToDone") and t.get("state") in ("dispatched", "working") and t.get("assignee")):
+                if not t or not (t.get("workToDone") and t.get("state") == "working" and t.get("assignee")):
                     continue
                 idle = assignee_idle_secs(t["assignee"])
                 if idle is None:
@@ -346,10 +379,12 @@ def apply_update(d):
             elif d.get("workToDone") is False:
                 t["workToDone"] = False
             if "state" in d:
+                if d["state"] not in VALID_STATES:
+                    return {"error": f"invalid state {d['state']!r} (allowed: {sorted(VALID_STATES)})"}
                 if d["state"] == "done" and not t.get("verified"):
                     return {"error": "cannot set done without verified"}
-                if d["state"] in ("dispatched", "working") and t["state"] == "needs_brainstorm":
-                    return {"error": "not dispatchable before ready (brainstorm gate)"}
+                if d["state"] == "working" and t["state"] == "needs_brainstorm":
+                    return {"error": "not workable before brainstorm (brainstorm gate)"}
                 t["state"] = d["state"]
             t["updated"] = now(); save(b)
             return {"ok": True, "bossEnqueued": boss_enqueued}
@@ -360,8 +395,8 @@ def apply_brainstorm(d):
         b = load(); t = b["tasks"].get(d.get("id"))
         if not t: return {"error": "no such task"}
         t["brainstorm"] = d.get("brainstorm", t.get("brainstorm", ""))
-        if d.get("promote") == "ready" and t["state"] == "needs_brainstorm" and t["brainstorm"].strip():
-            t["state"] = "ready"
+        if d.get("promote") and t["state"] == "needs_brainstorm" and t["brainstorm"].strip():
+            t["state"] = "working"
         t["updated"] = now(); save(b)
         return {"ok": True, "state": t["state"]}
 
@@ -372,6 +407,8 @@ def apply_status(d):
         if "lastStatus" in d: t["lastStatus"] = d["lastStatus"]
         if "verified" in d: t["verified"] = bool(d["verified"])
         if "state" in d:
+            if d["state"] not in VALID_STATES:
+                return {"error": f"invalid state {d['state']!r} (allowed: {sorted(VALID_STATES)})"}
             if d["state"] == "done" and not t.get("verified"):
                 return {"error": "cannot set done without verified"}
             t["state"] = d["state"]
@@ -420,7 +457,7 @@ class H(http.server.BaseHTTPRequestHandler):
     def do_OPTIONS(self): self._send(204, b"", "text/plain")
     def do_GET(self):
         p = self.path.split("?", 1)[0]
-        if p == "/health": return self._send(200, {"status": "ok", "service": "todo-v2"})
+        if p == "/health": return self._send(200, {"status": "ok", "service": "todo"})
         if p in ("/todos", "/todos/", "/"):
             try:
                 html = HTML_PATH.read_text().replace("__QUEUE_SECRET__", SECRET)
@@ -465,6 +502,6 @@ if __name__ == "__main__":
     if not BOARD_PATH.exists(): save(_default_board())
     threading.Thread(target=cron_loop, daemon=True).start()
     threading.Thread(target=watchdog_loop, daemon=True).start()
-    print(f"todo-v2 :{PORT}  store={BOARD_PATH}  cron={PING_CRON}s grace={IDLE_GRACE}s "
+    print(f"todo :{PORT}  store={BOARD_PATH}  cron={PING_CRON}s grace={IDLE_GRACE}s "
           f"stall={IDLE_STALL}s/scan{WATCHDOG}s sink={'file' if TEST_SINK else 'mp'}", flush=True)
     Server(("0.0.0.0", PORT), H).serve_forever()

@@ -654,6 +654,19 @@ def main():
         assert '"event": "duplicate"' in audit, audit
         assert '"memory_key": "pageA:101"' in audit, audit
         assert real_agent in audit, audit
+
+        # ── Live-agent-only guard (NO hardcoding, ever) ───────────────────
+        # Every inbound — including SEED/keyword messages — MUST be answered
+        # by the real MyPeople mp-queue worker. No keyword short-circuit, no
+        # canned/template reply, no standalone `claude -p` may reintroduce a
+        # hardcoded answer. This assertion fails the seed if one is folded in.
+        brain_src = (BIN / "mypeople_brain.py").read_text()
+        forbidden = ["seed_access_reply", "wants_seed_access", "TRIGGER_WORDS", "campaign-access"]
+        leaked = [tok for tok in forbidden if tok in brain_src]
+        assert not leaked, f"brain has a hardcoded/template short-circuit (forbidden): {leaked}"
+        assert all(t in brain_src for t in ('"mp"', '"send"', '"peek"')), \
+            "brain must produce replies via the live mp-queue worker (mp send/peek)"
+
         print("VERIFY_OK")
         print("SEED_RESULT=DONE")
         print(f"REAL_MYPEOPLE_AGENT={real_agent}")

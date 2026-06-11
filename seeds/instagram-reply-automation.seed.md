@@ -177,7 +177,7 @@ def _mp_reply(request, memory, timeout):
     # new_follower=short welcome/hook (there is no inbound message).
     directive = {
         "comment": "This person COMMENTED on the creator's post/reel. Reply as one warm human DM that acknowledges them and moves them toward access. If they ask for SEED/access/link, include seed_url verbatim.",
-        "new_follower": "This person JUST FOLLOWED the creator. There is NO message from them. Send one short, warm welcome that hooks them and invites them to reply SEED for access; include seed_url only if it fits naturally.",
+        "new_follower": "This person JUST FOLLOWED the creator. There is NO message from them. Send ONE short, casual, friendly opener in the creator's own voice that ENGAGES them with a light question to start a real conversation (in the style of 'e ai, beleza? voce e de tech tambem?'). Do NOT pitch, sell, or mention SEED / links / access in this first message — just spark a genuine reply.",
     }.get(ev, "This is a direct Instagram DM. Reply to their message. If they ask for SEED/access/link, include seed_url verbatim.")
     prompt = (
         "INSTAGRAM ATTENDANT REQUEST.\n"

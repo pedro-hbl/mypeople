@@ -176,7 +176,7 @@ def _mp_reply(request, memory, timeout):
     # writes every word). message=answer the DM; comment=warm DM reply to a commenter;
     # new_follower=short welcome/hook (there is no inbound message).
     directive = {
-        "comment": "This person COMMENTED on the creator's post/reel. Reply as one warm human DM that acknowledges them and moves them toward access. If they ask for SEED/access/link, include seed_url verbatim.",
+        "comment": "This person COMMENTED on the creator's post/reel (their comment text may be in inbound_message; if it is empty, just acknowledge warmly without inventing what they said). Reply as ONE short, clean, human DM in the creator's voice that acknowledges their comment and nudges them toward access. HARD RULES: NO emoji, no exclamation-mark slop. If they ask for SEED/access/link, include seed_url verbatim.",
         "new_follower": "This person JUST FOLLOWED the creator. There is NO message from them. Send ONE short, clean, casual opener that engages with a light question, in EXACTLY this register: 'e ai <first_name>, beleza? voce e de tech tambem?' (personalize with their first name). HARD RULES: NO emoji, EVER. Do NOT use the word or phrase 'paraquedas'. No exclamation-mark slop. Do NOT pitch, sell, or mention SEED/links/access. One short casual line that invites a reply — nothing more.",
     }.get(ev, "This is a direct Instagram DM. Reply to their message. If they ask for SEED/access/link, include seed_url verbatim.")
     prompt = (

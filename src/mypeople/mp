@@ -1,0 +1,237 @@
+#!/usr/bin/env python3
+"""mp — mypeople CLI for Kimi.
+
+Verbs: status, spawn, send, peek, kill
+
+The CLI talks to the queue server over HTTP. Configuration is read from
+~/.config/mypeople/queue.env (or env vars QUEUE_URL / QUEUE_SECRET).
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import socket
+import sys
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+from pathlib import Path
+from typing import Any
+
+
+CONFIG_DIR = Path.home() / ".config" / "mypeople"
+CONFIG_FILE = CONFIG_DIR / "queue.env"
+DEFAULT_TIMEOUT = 120
+POLL_INTERVAL = 0.3
+
+
+def load_env() -> dict[str, str]:
+    cfg: dict[str, str] = {}
+    if CONFIG_FILE.exists():
+        for line in CONFIG_FILE.read_text().splitlines():
+            line = line.strip()
+            if "=" in line and not line.startswith("#"):
+                k, _, v = line.partition("=")
+                cfg[k.strip()] = v.strip().strip('"').strip("'")
+    cfg["QUEUE_URL"] = os.environ.get("QUEUE_URL", cfg.get("QUEUE_URL", "http://127.0.0.1:9900"))
+    cfg["QUEUE_SECRET"] = os.environ.get("QUEUE_SECRET", cfg.get("QUEUE_SECRET", ""))
+    cfg["HOST_ID"] = os.environ.get("HOST_ID", cfg.get("HOST_ID", "")) or _hostname()
+    return cfg
+
+
+def _hostname() -> str:
+    # Some WSL distros lack `hostname -s`; socket.gethostname() is portable.
+    return socket.gethostname().split(".")[0]
+
+
+def http_get(url: str, secret: str) -> Any:
+    req = urllib.request.Request(url, headers={"X-Queue-Secret": secret})
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            body = resp.read().decode()
+            return json.loads(body) if body.strip() else {}
+    except urllib.error.HTTPError as e:
+        body = e.read().decode() if e.fp else ""
+        try:
+            return json.loads(body) if body.strip() else {"ok": False, "error": f"HTTP {e.code}"}
+        except json.JSONDecodeError:
+            return {"ok": False, "error": f"HTTP {e.code}: {body[:200]}"}
+
+
+def http_post(url: str, secret: str, data: dict[str, Any]) -> Any:
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(data).encode(),
+        headers={"Content-Type": "application/json", "X-Queue-Secret": secret},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            body = resp.read().decode()
+            return json.loads(body) if body.strip() else {}
+    except urllib.error.HTTPError as e:
+        body = e.read().decode() if e.fp else ""
+        try:
+            return json.loads(body) if body.strip() else {"ok": False, "error": f"HTTP {e.code}"}
+        except json.JSONDecodeError:
+            return {"ok": False, "error": f"HTTP {e.code}: {body[:200]}"}
+
+
+def canonicalize_agent_id(arg: str, host_id: str) -> str:
+    if "/" in arg and ":" in arg:
+        return arg
+    if "/" in arg:
+        return f"{host_id}/{arg}"
+    if ":" in arg:
+        return f"{host_id}/{arg}"
+    raise ValueError(f"agent_id must contain '/' or ':'; got {arg!r}")
+
+
+def cmd_status(cfg: dict[str, str], args: list[str]) -> None:
+    url, secret = cfg["QUEUE_URL"], cfg["QUEUE_SECRET"]
+    try:
+        agents = http_get(f"{url}/agents", secret)
+    except urllib.error.URLError as e:
+        print(f"queue-server unreachable at {url}: {e}", file=sys.stderr)
+        sys.exit(1)
+    if not agents:
+        print("No active agents.")
+        return
+    for a in agents:
+        boss = a.get("boss_id", "")
+        boss_part = f" boss={boss}" if boss else ""
+        master_part = " [MASTER]" if a.get("is_master") else ""
+        print(
+            f" {a['agent_id']} [{a.get('state', '?')}]"
+            f"{boss_part}{master_part} — {a.get('summary', '')}"
+        )
+
+
+def cmd_spawn(cfg: dict[str, str], args: list[str]) -> None:
+    if len(args) < 1:
+        print("Usage: mp spawn <agent-id> [--cwd PATH] [--boss AGENT] [--master]", file=sys.stderr)
+        sys.exit(2)
+
+    aid = canonicalize_agent_id(args[0], cfg["HOST_ID"])
+    cwd = "."
+    boss_id = ""
+    is_master = False
+    i = 1
+    while i < len(args):
+        if args[i] == "--cwd" and i + 1 < len(args):
+            cwd = args[i + 1]
+            i += 2
+        elif args[i] == "--boss" and i + 1 < len(args):
+            boss_id = canonicalize_agent_id(args[i + 1], cfg["HOST_ID"])
+            i += 2
+        elif args[i] == "--master":
+            is_master = True
+            i += 1
+        else:
+            print(f"unknown arg: {args[i]}", file=sys.stderr)
+            sys.exit(2)
+
+    url, secret = cfg["QUEUE_URL"], cfg["QUEUE_SECRET"]
+    body = {
+        "action": "spawn",
+        "payload": {
+            "agent_id": aid,
+            "cwd": os.path.abspath(cwd),
+            "boss_id": boss_id,
+            "is_master": is_master,
+        },
+    }
+    r = http_post(f"{url}/task/submit", secret, body)
+    if r.get("ok"):
+        res = r.get("result", {})
+        master_part = " [MASTER]" if res.get("is_master") else ""
+        print(f"Spawned {res.get('agent_id', aid)}{master_part}")
+    else:
+        print(f"Spawn FAILED: {r.get('error', '?')}", file=sys.stderr)
+        sys.exit(1)
+
+
+def cmd_send(cfg: dict[str, str], args: list[str]) -> None:
+    if len(args) < 2:
+        print("Usage: mp send <agent-id> <message...>", file=sys.stderr)
+        sys.exit(2)
+    aid = canonicalize_agent_id(args[0], cfg["HOST_ID"])
+    msg = " ".join(args[1:])
+    url, secret = cfg["QUEUE_URL"], cfg["QUEUE_SECRET"]
+    body = {
+        "action": "send",
+        "target_agent": aid,
+        "payload": {"message": msg},
+    }
+    r = http_post(f"{url}/task/submit", secret, body)
+    if r.get("ok"):
+        print(f"Sent to {aid}")
+    else:
+        print(f"Send FAILED: {r.get('error', '?')}", file=sys.stderr)
+        sys.exit(1)
+
+
+def cmd_peek(cfg: dict[str, str], args: list[str]) -> None:
+    if len(args) < 1:
+        print("Usage: mp peek <agent-id>", file=sys.stderr)
+        sys.exit(2)
+    aid = canonicalize_agent_id(args[0], cfg["HOST_ID"])
+    url, secret = cfg["QUEUE_URL"], cfg["QUEUE_SECRET"]
+    body = {"action": "peek", "target_agent": aid}
+    r = http_post(f"{url}/task/submit", secret, body)
+    if r.get("ok"):
+        res = r.get("result", {})
+        print(f"[mp peek {aid}] state={res.get('state')} — {res.get('summary', '')}")
+        for h in res.get("history", []):
+            role = h.get("role", "?")
+            text = h.get("text", "")
+            print(f"  [{role}] {text[:200]}")
+    else:
+        print(f"Peek FAILED: {r.get('error', '?')}", file=sys.stderr)
+        sys.exit(1)
+
+
+def cmd_kill(cfg: dict[str, str], args: list[str]) -> None:
+    if len(args) < 1:
+        print("Usage: mp kill <agent-id>", file=sys.stderr)
+        sys.exit(2)
+    aid = canonicalize_agent_id(args[0], cfg["HOST_ID"])
+    url, secret = cfg["QUEUE_URL"], cfg["QUEUE_SECRET"]
+    body = {"action": "kill", "target_agent": aid}
+    r = http_post(f"{url}/task/submit", secret, body)
+    if r.get("ok"):
+        print(f"Killed {aid}")
+    else:
+        print(f"Kill FAILED: {r.get('error', '?')}", file=sys.stderr)
+        sys.exit(1)
+
+
+COMMANDS = {
+    "status": cmd_status,
+    "spawn": cmd_spawn,
+    "send": cmd_send,
+    "peek": cmd_peek,
+    "kill": cmd_kill,
+}
+
+
+def main() -> None:
+    if len(sys.argv) < 2:
+        print("Usage: mp <command> [args]\n\nCommands: " + ", ".join(COMMANDS.keys()), file=sys.stderr)
+        sys.exit(2)
+
+    cfg = load_env()
+    cmd = sys.argv[1]
+    rest = sys.argv[2:]
+    fn = COMMANDS.get(cmd)
+    if not fn:
+        print(f"Unknown command: {cmd}\n\nCommands: " + ", ".join(COMMANDS.keys()), file=sys.stderr)
+        sys.exit(2)
+
+    fn(cfg, rest)
+
+
+if __name__ == "__main__":
+    main()

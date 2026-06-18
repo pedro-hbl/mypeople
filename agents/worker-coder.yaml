@@ -1,0 +1,5 @@
+version: 1
+agent:
+  name: mypeople-coder
+  extend: default
+  system_prompt_path: ./worker-coder.md

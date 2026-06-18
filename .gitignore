@@ -1,6 +1,20 @@
 .wiki-update-brief.md
 .gstack/
 
+# Kimi local state (sessions, credentials, logs) — never commit
+.kimi/
+sessions/
+credentials/
+
+# Runtime / generated artifacts
+*.env
+!*.env.example
+*.env.local
+*.bak-*
+*.bak
+.recovery/
+tmp/
+
 # ManyChat prototype secrets
 prototypes/manychat-ig/.env
 
@@ -10,12 +24,9 @@ prototypes/manychat-ig/.env
 todo/data/auth/
 
 # Generated / ephemeral runtime data (board mutations, outbox queue, inbox log)
-*.bak-*
-*.bak
 todo/data/board.v2.json.bak-*
 todo/data/wa-outbox.json
 todo/data/boss-inbox.log
-.recovery/
 
 # Per-card proof + QA artifacts (heavy png/mp4/cast frames) — local evidence, not source
 todo/data/proofs/

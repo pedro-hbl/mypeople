@@ -1,14 +1,25 @@
-# Smoke test — 30s
+# Smoke test
 
-Paste this whole block into the Boss's claude pane:
+30-second sanity check for the Kimi-native mypeople runtime.
 
----
+## Prerequisites
 
-Spawn two engineers (`--boss yourself`, `--cwd /tmp`): eng-a, eng-b. Wait for each [AGENT NOTIFICATION] before sending the next message.
+- Queue server is running: `./scripts/start-queue-server.sh`
+- `mp` is on PATH: `mp status` works.
 
-1. send eng-a: "reply with exactly: PING-A"
-2. send eng-b: "reply with exactly: PING-B"
-3. After both notifications arrive, report: "eng-a said: <reply>; eng-b said: <reply>". Verify both replies contain their expected marker.
-4. kill eng-a and eng-b.
+## Steps
 
-PASS if both markers came back correctly and engineers are killed cleanly.
+```bash
+HOST=$(hostname -s)
+mp spawn "$HOST"/smoke:w1 --cwd /tmp
+mp status | grep -q 'smoke:w1.*idle'
+mp send "$HOST"/smoke:w1 "Reply with the single word PONG only."
+sleep 5
+mp peek "$HOST"/smoke:w1 | grep -q 'state=idle'
+mp kill "$HOST"/smoke:w1
+mp status | grep -q 'smoke:w1.*dead'
+```
+
+## Verify
+
+All commands exit 0 and `mp status` reflects the expected states.

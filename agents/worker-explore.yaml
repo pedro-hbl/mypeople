@@ -1,0 +1,5 @@
+version: 1
+agent:
+  name: mypeople-explore
+  extend: default
+  system_prompt_path: ./worker-explore.md

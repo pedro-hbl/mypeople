@@ -1,0 +1,15 @@
+version: 1
+agent:
+  name: mypeople-boss
+  extend: default
+  system_prompt_path: ./boss-kimi.md
+  subagents:
+    coder:
+      path: ./worker-coder.yaml
+      description: "Implement code, run tests, fix bugs"
+    explore:
+      path: ./worker-explore.yaml
+      description: "Read-only codebase exploration and summarization"
+    plan:
+      path: ./worker-plan.yaml
+      description: "Create implementation plans and architecture designs"
